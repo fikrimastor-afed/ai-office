@@ -19,15 +19,17 @@
     <button class="stat" id="stat" title="Who is working now"></button>
     <span class="sep"></span>
     <span class="mono faint" id="where"></span>
-    <button class="ibtn" id="theme" type="button"></button>
-    <button class="ibtn" data-go="settings" title="Settings" id="gear"></button>
+    <button class="ibtn" id="theme" type="button" aria-label="Switch theme"></button>
+    <button class="ibtn" data-go="settings" title="Settings" aria-label="Settings" id="gear"></button>
   </div>
 </header>
 <div class="sub" id="sub"></div>
 <main id="views"></main>
-<aside id="okDrawer"></aside>
-<div class="modal" id="modal"><div class="mbox" id="mbox"></div></div>
+<aside id="okDrawer" aria-label="Needs your OK"></aside>
+<div class="modal" id="modal"><div class="mbox" id="mbox" role="dialog" aria-modal="true"></div></div>
 <div class="toast" id="toast"></div>
+<div class="sr" id="live" role="status" aria-live="polite"></div>
+<div class="sr" id="liveErr" role="alert"></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

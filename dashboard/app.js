@@ -11,6 +11,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const SWATCH = ['#FF6B6B', '#FF9F1C', '#2EC4B6', '#3A86FF', '#06D6A0', '#F15BB5', '#8D6E63', '#118AB2', '#8338EC', '#E0524F'];
 const SKINS = ['#F7D7B5', '#F3C7A2', '#F0C8A0', '#EDB98A', '#E3AE7C', '#C98E5E', '#A8724A', '#7A4E2E'];
 const HAIRS = ['#1A1A1A', '#2B2233', '#6B4423', '#A0522D', '#C9A26B', '#8D93A5'];
+const swatch = (c, what, on) => `<i style="background:${c}" data-v="${c}" class="${on ? 'on' : ''}" role="button" tabindex="0" aria-label="${what} ${c}" aria-pressed="${on}"></i>`;
 
 async function api(path, method = 'GET', body) {
   const res = await fetch(`/api/${path}`, {
@@ -57,19 +58,71 @@ function when(iso) {
 let toastT;
 function toast(msg, err) {
   const t = $('#toast'); t.textContent = msg; t.className = `toast on${err ? ' err' : ''}`;
+  (err ? $('#liveErr') : $('#live')).textContent = msg; // screen readers: the toast is not a live region itself
   clearTimeout(toastT); toastT = setTimeout(() => { t.className = 'toast'; }, err ? 5000 : 2200);
 }
 async function act(fn, ok) {
   try { const r = await fn(); if (ok) toast(ok); return r; } catch (e) { toast(e.message, true); throw e; }
 }
-function modal(html, wire) {
-  $('#mbox').innerHTML = html; $('#modal').classList.add('on');
-  const close = () => $('#modal').classList.remove('on');
-  $$('[data-close]', $('#mbox')).forEach((b) => { b.onclick = close; });
-  wire && wire(close);
-  const first = $('input,textarea', $('#mbox')); first && first.focus();
+// One close path for every way out (Cancel, Escape, backdrop click): focus goes back to whatever opened the dialog.
+let modalOpener = null;
+function closeModal() {
+  const m = $('#modal'); if (!m.classList.contains('on')) return;
+  m.classList.remove('on');
+  const o = modalOpener; modalOpener = null;
+  if (o && o.isConnected) o.focus({ preventScroll: true });
 }
-$('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') $('#modal').classList.remove('on'); });
+function modal(html, wire) {
+  if (!$('#modal').classList.contains('on')) modalOpener = document.activeElement;
+  const box = $('#mbox');
+  box.innerHTML = html; $('#modal').classList.add('on');
+  const h = $('.mh b', box);
+  if (h) { h.id = 'mTitle'; box.setAttribute('aria-labelledby', 'mTitle'); } else box.removeAttribute('aria-labelledby');
+  $$('[data-close]', box).forEach((b) => { b.onclick = closeModal; });
+  wire && wire(closeModal);
+  const first = $('input,textarea', box) || $('button:not([disabled])', box); first && first.focus();
+}
+$('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
+document.addEventListener('keydown', (e) => {
+  if (!$('#modal').classList.contains('on')) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeModal(); return; }
+  if (e.key !== 'Tab') return;
+  // keep Tab inside the dialog: wrap at both ends, and pull focus back in if it strayed
+  const box = $('#mbox');
+  const f = $$('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])', box);
+  if (!f.length) { e.preventDefault(); return; }
+  const first = f[0], last = f[f.length - 1], at = document.activeElement;
+  if (e.shiftKey && (at === first || !box.contains(at))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (at === last || !box.contains(at))) { e.preventDefault(); first.focus(); }
+});
+
+// Keys for clickable cards, rows and chat heads (they are divs or rows, not buttons): Enter and Space click them.
+document.addEventListener('keydown', (e) => {
+  if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.matches('[role="button"][tabindex="0"], tr[tabindex="0"]')) return;
+  e.preventDefault(); e.target.click();
+});
+
+// Drawing a list again replaces its elements, which drops keyboard focus. Put focus back on the element
+// with the same data-* attributes (a tab, a chat head, a row, a button in a list).
+const dataKey = (x) => [...x.attributes].filter((y) => y.name.startsWith('data-')).map((y) => `${y.name}=${y.value}`).join('|');
+function redraw(el, html) {
+  const a = document.activeElement, key = a && a !== el && el.contains(a) ? dataKey(a) : '';
+  el.innerHTML = html;
+  const n = key && [...el.querySelectorAll('*')].find((x) => dataKey(x) === key);
+  if (n) n.focus({ preventScroll: true });
+}
+
+// Each label.lbl gets the field right after it (group labels such as swatches are left alone).
+let labelSeq = 0;
+function labelControls(root = document) {
+  $$('label.lbl:not([for])', root).forEach((l) => {
+    const c = l.nextElementSibling;
+    if (!c || !/^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName)) return;
+    if (!c.id) c.id = `field-${++labelSeq}`;
+    l.htmlFor = c.id;
+  });
+}
+for (const el of [$('#views'), $('#mbox'), $('#okDrawer')]) new MutationObserver(() => labelControls(el)).observe(el, { childList: true, subtree: true });
 
 // Resizable split panes; the fixed pane's width is remembered.
 function wireSplits(root) {
@@ -94,7 +147,7 @@ function renderTop() {
   const activeP = S.projects.filter((p) => p.status !== 'done').length;
   const tabs = [['office', 'layout-grid', 'Office', ''], ['staff', 'users', 'Staff', S.staff.length],
     ['projects', 'folder', 'Projects', activeP || ''], ['inbox', 'inbox', 'Inbox', newIn || '']];
-  $('#tabs').innerHTML = tabs.map(([v, ic, label, n]) => `<button class="tab ${S.view === v ? 'on' : ''}" data-go="${v}" aria-label="${label}" title="${label}">${icon(ic)}<span class="tl">${label}</span>${n !== '' ? ` <span class="n ${v === 'inbox' ? 'warn' : ''}">${n}</span>` : ''}</button>`).join('');
+  redraw($('#tabs'), tabs.map(([v, ic, label, n]) => `<button class="tab ${S.view === v ? 'on' : ''}" data-go="${v}" aria-label="${label}" title="${label}">${icon(ic)}<span class="tl">${label}</span>${n !== '' ? ` <span class="n ${v === 'inbox' ? 'warn' : ''}">${n}</span>` : ''}</button>`).join(''));
   const st = Object.values(S.status.people);
   const cnt = (k) => st.filter((x) => x.status === k).length;
   $('#stat').innerHTML = `<span class="d working" style="background:#4ADE80"></span><b>${cnt('working')}</b><span class="tl"> working</span> <span class="d" style="background:rgba(255,255,255,.55);margin-left:8px"></span><b>${cnt('sleeping')}</b><span class="tl"> sleeping</span>${cnt('waiting') ? ` <span class="d" style="background:#FFB020;margin-left:8px"></span><b>${cnt('waiting')}</b><span class="tl"> waiting</span>` : ''}`;
@@ -106,7 +159,7 @@ function renderSub() {
   const t = {
     office: `<span class="livebadge"><i class="d working"></i>Live</span><span class="legend2"><span><i class="d working"></i>Working</span><span><i class="d sleeping"></i>Sleeping</span><span><i class="d waiting"></i>Waiting for OK</span></span>
       <span class="faint hint" style="margin-left:10px">Click anyone to chat. Drag to move, scroll to zoom.</span>
-      <div class="zoom"><button class="ibtn" id="zOut" title="Zoom out">${icon('minus')}</button><span id="zPct">${Math.round(V.zoom * 100)}%</span><button class="ibtn" id="zIn" title="Zoom in">${icon('plus')}</button><button class="ibtn" id="zFit" title="Fit to screen">${icon('maximize')}</button></div>`,
+      <div class="zoom"><button class="ibtn" id="zOut" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><span id="zPct">${Math.round(V.zoom * 100)}%</span><button class="ibtn" id="zIn" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="ibtn" id="zFit" title="Fit to screen" aria-label="Fit to screen">${icon('maximize')}</button></div>`,
     staff: `<b>Team</b><span class="muted">${esc(pa().name)} + ${S.staff.length} staff. Changes save to each staff's CLAUDE.md.</span>`,
     projects: `<b>Projects</b><span class="muted">One folder per project, each with its own notes that staff read before working.</span>`,
     inbox: `<b>Inbox</b><span class="muted">Customer requests waiting for your team. One file each in inbox/.</span>`,
@@ -195,7 +248,7 @@ async function draw3d() {
     stage.replaceChildren(inner); scene = r;
     prevPeople = null; walks();
     stage.style.width = `${r.width}px`; stage.style.height = `${r.height}px`;
-    $$('.tag[data-id]', inner).forEach((t) => { t.onclick = () => openChat(t.dataset.id); });
+    $$('.tag[data-id]', inner).forEach((t) => { t.onclick = () => openChat(t.dataset.id); t.tabIndex = 0; t.setAttribute('role', 'button'); });
     const l = $('#oLoad'); if (l) l.remove();
     fitOffice();
   } catch (e) {
@@ -289,15 +342,16 @@ function renderOk() {
   const body = tab === 'waiting'
     ? (n ? pendingOks().map(okItem).join('') : `<div class="okempty">${icon('party-popper')}All clear. Nothing waiting for you.</div>`)
     : (decided.length ? decided.slice(0, 100).map(okItem).join('') + (decided.length > 100 ? `<div class="okempty">Showing the latest 100. All decisions are kept in approvals/.</div>` : '') : `<div class="okempty">${icon('clock')}No decisions yet.</div>`);
-  $('#okDrawer').innerHTML = `<div class="okhead"><span class="okicon">${icon('hand')}</span>Needs your OK<span class="okn ${n ? '' : 'zero'}">${n}</span><button class="ibtn" data-oktoggle title="Close">${icon('x')}</button></div>
+  $('#okDrawer').inert = !S.okOpen; // closed, it slides off screen: keep its buttons out of the Tab order
+  redraw($('#okDrawer'), `<div class="okhead"><span class="okicon">${icon('hand')}</span>Needs your OK<span class="okn ${n ? '' : 'zero'}">${n}</span><button class="ibtn" data-oktoggle title="Close" aria-label="Close">${icon('x')}</button></div>
     <div class="oktabs"><div class="seg"><button class="${tab === 'waiting' ? 'on' : ''}" data-oktab="waiting">Waiting <span>${n}</span></button><button class="${tab === 'history' ? 'on' : ''}" data-oktab="history">History <span>${decided.length}</span></button></div></div>
-    <div class="okbody">${body}</div>`;
+    <div class="okbody">${body}</div>`);
   $$('[data-oktab]', $('#okDrawer')).forEach((b) => { b.onclick = () => { S.okTab = b.dataset.oktab; renderOk(); }; });
   renderOkButton();
 }
 
 // ------------------------------------------------------------------ staff
-function renderStaff() {
+function renderStaff(fromStatus) {
   const v = $('#v-staff');
   if (!$('.split', v)) {
     v.innerHTML = `<div class="split">
@@ -308,7 +362,7 @@ function renderStaff() {
     $('#addStaff').onclick = addStaffModal;
   }
   const arch = S.office.archived || [];
-  $('#staffSeg').innerHTML = `<button class="${S.staffSeg === 'active' ? 'on' : ''}" data-seg="active">Active <span>${S.staff.length + 1}</span></button><button class="${S.staffSeg === 'archived' ? 'on' : ''}" data-seg="archived">Archived <span>${arch.length}</span></button>`;
+  redraw($('#staffSeg'), `<button class="${S.staffSeg === 'active' ? 'on' : ''}" data-seg="active">Active <span>${S.staff.length + 1}</span></button><button class="${S.staffSeg === 'archived' ? 'on' : ''}" data-seg="archived">Archived <span>${arch.length}</span></button>`);
   $$('#staffSeg button').forEach((b) => { b.onclick = () => { S.staffSeg = b.dataset.seg; renderStaff(); }; });
   $('#addStaff').disabled = S.staff.length >= 8;
   $('#addStaff').title = S.staff.length >= 8 ? 'At most 8 staff. Archive one first.' : '';
@@ -319,19 +373,20 @@ function renderStaff() {
     const LAB = { working: 'Working', sleeping: 'Sleeping', waiting: 'Waiting for OK' };
     const stCells = (id) => { const x = S.status.people[id] || { status: 'sleeping' };
       return `<td><span class="badge ${x.status}"><i class="d ${x.status}"></i>${LAB[x.status]}</span></td><td class="muted" style="max-width:260px">${esc(x.status === 'working' ? taskText(id, x.task) : '') || '-'}</td><td class="muted">${x.last ? when(x.last) : '-'}</td>`; };
-    $('#staffList').innerHTML = `<table class="stafftbl"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Now doing</th><th>Last active</th></tr></thead><tbody>
-      <tr data-who="pa" class="${S.sel.staff === 'pa' ? 'sel' : ''}"><td><span class="who">${paAv()}${esc(pa().name)} ${MGR}</span></td><td>Manager</td>${stCells('pa')}</tr>
-      ${S.staff.map((s) => `<tr data-who="${esc(s.id)}" class="${S.sel.staff === s.id ? 'sel' : ''}" title="${esc(s.job)}"><td><span class="who">${av(s)}${esc(s.name)}</span></td><td><span style="display:inline-flex;align-items:center;gap:6px"><i class="d" style="border-radius:2px;background:${esc(s.colour)}"></i>${esc(s.role)}</span>${invChip(s.id)}</td>${stCells(s.id)}</tr>`).join('')}
-      </tbody></table>`;
+    redraw($('#staffList'), `<table class="stafftbl"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Now doing</th><th>Last active</th></tr></thead><tbody>
+      <tr data-who="pa" tabindex="0" class="${S.sel.staff === 'pa' ? 'sel' : ''}"><td><span class="who">${paAv()}${esc(pa().name)} ${MGR}</span></td><td>Manager</td>${stCells('pa')}</tr>
+      ${S.staff.map((s) => `<tr data-who="${esc(s.id)}" tabindex="0" class="${S.sel.staff === s.id ? 'sel' : ''}" title="${esc(s.job)}"><td><span class="who">${av(s)}${esc(s.name)}</span></td><td><span style="display:inline-flex;align-items:center;gap:6px"><i class="d" style="border-radius:2px;background:${esc(s.colour)}"></i>${esc(s.role)}</span>${invChip(s.id)}</td>${stCells(s.id)}</tr>`).join('')}
+      </tbody></table>`);
     $$('#staffList tr[data-who]').forEach((tr) => { tr.onclick = () => { if (S.dirty.has('staff') && !confirm('Discard your unsaved changes?')) return; S.dirty.delete('staff'); S.sel.staff = tr.dataset.who; renderStaff(); }; });
   } else {
-    $('#staffList').innerHTML = `<div class="arcnote">${icon('archive')}<div>Archived staff keep their folder, notes and history. They don't get work and don't show in the office.</div></div>
+    redraw($('#staffList'), `<div class="arcnote">${icon('archive')}<div>Archived staff keep their folder, notes and history. They don't get work and don't show in the office.</div></div>
       ${arch.length ? `<table><thead><tr><th>Name</th><th>Role</th><th>Archived</th><th>Folder</th><th></th></tr></thead><tbody>${arch.map((s) => `<tr style="cursor:default"><td><span class="who">${av(s, 'grey')}${esc(s.name)}</span></td><td class="muted">${esc(s.role)}</td><td class="muted">${esc(s.archivedAt || '')}</td><td class="mono muted">.archive/staff/${esc(s.id)}/</td>
-        <td style="text-align:right"><button class="btn sm" data-react="${esc(s.id)}">${icon('rotate-ccw')}Reactivate</button> <button class="btn sm danger" data-del="${esc(s.id)}">${icon('trash-2')}Delete permanently</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No archived staff.</div>'}`;
+        <td style="text-align:right"><button class="btn sm" data-react="${esc(s.id)}">${icon('rotate-ccw')}Reactivate</button> <button class="btn sm danger" data-del="${esc(s.id)}">${icon('trash-2')}Delete permanently</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No archived staff.</div>'}`);
     $$('[data-react]').forEach((b) => { b.onclick = () => act(() => api(`staff/${b.dataset.react}/reactivate`, 'POST'), 'Reactivated').then(() => refresh(['office', 'staff'])); });
     $$('[data-del]').forEach((b) => { b.onclick = () => deleteStaffModal(staffById(b.dataset.del)); });
   }
-  if (!S.dirty.has('staff')) renderStaffForm();
+  // a live status update (fromStatus) must not rebuild the form under the keyboard user's focus
+  if (!S.dirty.has('staff') && !(fromStatus && $('#staffForm').contains(document.activeElement))) renderStaffForm();
 }
 
 // Model and effort pickers (Staff page). Defaults come from the office until the boss changes them.
@@ -355,7 +410,7 @@ function renderStaffForm() {
   const f = $('#staffForm');
   const id = S.sel.staff;
   if (id === 'pa') {
-    f.innerHTML = `<div class="ph">${paAv()}<h3>${esc(pa().name)}</h3>${MGR}<div class="acts"><button class="ibtn" data-x>${icon('x')}</button></div></div>
+    f.innerHTML = `<div class="ph">${paAv()}<h3>${esc(pa().name)}</h3>${MGR}<div class="acts"><button class="ibtn" data-x aria-label="Close">${icon('x')}</button></div></div>
       <div class="pb pre">${esc(pa().name)} is your manager. Every task goes through ${esc(pa().name)}, who hands it to the right staff, checks the result and reports back to you.
 
 ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in the office folder. The team table in it updates by itself when you add, edit or archive staff.</div>
@@ -367,23 +422,23 @@ ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in t
     const s = S.staff.find((x) => x.id === id);
     if (!s) { f.innerHTML = `<div class="empty"><b>Pick a staff</b>Click a row to edit their job, rules and look.</div>`; S.sel.staff = null; return; }
     const look = s.look || {};
-    f.innerHTML = `<div class="ph"><span id="fAv">${av(s)}</span><h3>${esc(s.name)}</h3><span class="cnt">Edit</span><div class="acts"><button class="ibtn" data-x title="Close">${icon('x')}</button></div></div>
+    f.innerHTML = `<div class="ph"><span id="fAv">${av(s)}</span><h3>${esc(s.name)}</h3><span class="cnt">Edit</span><div class="acts"><button class="ibtn" data-x title="Close" aria-label="Close">${icon('x')}</button></div></div>
       <div class="pb form" id="sf">
         <div class="grid2"><div><label class="lbl">Name</label><input class="in" name="name" value="${esc(s.name)}" maxlength="40"></div>
         <div><label class="lbl">Role</label><input class="in" name="role" value="${esc(s.role)}" maxlength="60"></div></div>
         <label class="lbl">What does ${esc(s.name)} do?</label><textarea class="in" name="job" rows="3">${esc(s.job)}</textarea>
         <label class="lbl">Rules (one per line)</label><textarea class="in" name="rules" rows="6">${esc(s.rules.join('\n'))}</textarea>
         <label class="lbl">Notes</label><textarea class="in" name="notes" rows="3" placeholder="Things worth remembering about this job">${esc(s.notes)}</textarea>
-        <label class="lbl">Colour</label><div class="swatches" data-pick="colour">${SWATCH.map((c) => `<i style="background:${c}" data-v="${c}" class="${c.toLowerCase() === String(s.colour).toLowerCase() ? 'on' : ''}"></i>`).join('')}</div>
+        <label class="lbl">Colour</label><div class="swatches" data-pick="colour">${SWATCH.map((c) => swatch(c, 'Colour', c.toLowerCase() === String(s.colour).toLowerCase())).join('')}</div>
         <label class="lbl">Look</label>
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" name="scarf" ${look.scarf ? 'checked' : ''}> Headscarf</label>
-        <div class="swatches" data-pick="skin" style="margin-bottom:6px">${SKINS.map((c) => `<i style="background:${c}" data-v="${c}" class="${c === look.skin ? 'on' : ''}"></i>`).join('')}</div>
-        <div class="swatches" data-pick="hair">${HAIRS.map((c) => `<i style="background:${c}" data-v="${c}" class="${c === look.hair ? 'on' : ''}"></i>`).join('')}</div>
+        <div class="swatches" data-pick="skin" style="margin-bottom:6px">${SKINS.map((c) => swatch(c, 'Skin tone', c === look.skin)).join('')}</div>
+        <div class="swatches" data-pick="hair">${HAIRS.map((c) => swatch(c, 'Hair colour', c === look.hair)).join('')}</div>
         ${runFields(id)}
         <label class="lbl">Commands ${esc(s.name)} may run</label>
         <div class="cmdgrid">${(S.presets || []).map((p) => `<label class="cmd"><input type="checkbox" name="cmd" value="${esc(p.id)}" ${(p.id === 'docs' ? s.docs !== false : (s.commands || []).includes(p.id)) ? 'checked' : ''}><span><b>${esc(p.label)}</b><br><span class="faint">${esc(p.about)}</span></span></label>`).join('')}</div>
         ${docToolsLine()}
-        <textarea class="in mono" name="customCommands" rows="2" placeholder="Other commands, one per line, e.g. php vendor/bin/pint" style="margin-top:8px">${esc((s.customCommands || []).join('\n'))}</textarea>
+        <textarea class="in mono" name="customCommands" rows="2" aria-label="Other commands, one per line" placeholder="Other commands, one per line, e.g. php vendor/bin/pint" style="margin-top:8px">${esc((s.customCommands || []).join('\n'))}</textarea>
         <div class="faint" style="font-size:11.5px;margin-top:4px;line-height:1.5">Only in the office folder and linked folders. Never from the dashboard: git push, reset --hard, migrate:fresh, db:wipe, deleting with rm. You run those yourself.</div>
         <label class="lbl">Tools</label><div class="pre" style="padding:0;color:var(--muted)">${esc(s.tools.replace(/<!--[\s\S]*?-->/g, '').replace(/^- Commands you may run.*$/m, '').trim())}</div>
         <div class="arcnote" style="margin:10px 0 0">${icon('plug')}<div>To give ${esc(s.name)} a new tool (email, WhatsApp, an API), ask Claude in the office folder, for example <i>"let ${esc(s.name)} send WhatsApp messages"</i>.</div></div>
@@ -392,7 +447,7 @@ ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in t
       <div class="formfoot"><button class="btn pri" id="sSave">${icon('save')}Save</button><button class="btn" id="sCancel">Cancel</button><button class="btn danger" style="margin-left:auto" id="sArch">${icon('archive')}Archive</button></div>`;
     const pick = { colour: s.colour, skin: look.skin, hair: look.hair };
     const preview = () => { const sc = $('[name=scarf]', f).checked; $('#fAv').innerHTML = av({ colour: pick.colour, look: { scarf: sc, skin: pick.skin, hair: pick.hair } }); };
-    $$('[data-pick]', f).forEach((g) => { g.onclick = (e) => { const v = e.target.dataset.v; if (!v) return; pick[g.dataset.pick] = v; $$('i', g).forEach((i) => i.classList.toggle('on', i === e.target)); S.dirty.add('staff'); preview(); }; });
+    $$('[data-pick]', f).forEach((g) => { g.onclick = (e) => { const v = e.target.dataset.v; if (!v) return; pick[g.dataset.pick] = v; $$('i', g).forEach((i) => { i.classList.toggle('on', i === e.target); i.setAttribute('aria-pressed', String(i === e.target)); }); S.dirty.add('staff'); preview(); }; });
     $('#sf').oninput = () => { S.dirty.add('staff'); preview(); };
     $('#sCancel').onclick = () => { S.dirty.delete('staff'); renderStaffForm(); };
     $('#sSave').onclick = () => {
@@ -451,8 +506,8 @@ function renderProjects() {
     $('#newProj').onclick = newProjectModal;
   }
   $('#pCnt').textContent = S.projects.length;
-  $('#projList').innerHTML = S.projects.length ? S.projects.map((p) => `<div class="row ${S.sel.project === p.id ? 'sel' : ''}" data-p="${esc(p.id)}">${icon(p.status === 'done' ? 'check' : 'folder', 'faint')}<span class="txt"><b style="font-weight:600">${esc(p.title)}</b>${p.customer ? ` <span class="muted">${esc(p.customer)}</span>` : ''}</span><span class="badge ${esc(p.status)}">${esc(PSTAT[p.status] || p.status)}</span></div>`).join('')
-    : `<div class="empty"><b>No projects yet</b>${esc(pa().name)} creates one when you start work for a customer, or press New.</div>`;
+  redraw($('#projList'), S.projects.length ? S.projects.map((p) => `<div class="row ${S.sel.project === p.id ? 'sel' : ''}" data-p="${esc(p.id)}" role="button" tabindex="0">${icon(p.status === 'done' ? 'check' : 'folder', 'faint')}<span class="txt"><b style="font-weight:600">${esc(p.title)}</b>${p.customer ? ` <span class="muted">${esc(p.customer)}</span>` : ''}</span><span class="badge ${esc(p.status)}">${esc(PSTAT[p.status] || p.status)}</span></div>`).join('')
+    : `<div class="empty"><b>No projects yet</b>${esc(pa().name)} creates one when you start work for a customer, or press New.</div>`);
   $$('#projList [data-p]').forEach((r) => { r.onclick = async () => { S.sel.project = r.dataset.p; S.project = await api(`projects/${encodeURIComponent(r.dataset.p)}`); renderProjects(); }; });
   const p = S.project && S.project.id === S.sel.project ? S.project : null;
   if (!p) {
@@ -481,7 +536,7 @@ function renderProjects() {
   $('#projMem').innerHTML = `<div class="ph">${icon('brain', 'faint')}<h3>Notes</h3><span class="cnt">${p.notes.length}</span></div>
     <div class="pb">${p.notes.map((n) => `<div class="note">${icon(/\((?:boss|you),/i.test(n) ? 'pin' : 'bot')}<div>${esc(n)}</div></div>`).join('')}
       <div class="muted" style="padding:10px 12px;font-size:12px">Staff read these before working on the project and add new ones. Saved in <span class="mono">${esc(p.folder)}CLAUDE.md</span>.</div></div>
-    <div class="formfoot"><input class="in" id="noteIn" placeholder="Add a note for the team" maxlength="400"><button class="btn" id="noteAdd">${icon('plus')}Add</button></div>`;
+    <div class="formfoot"><input class="in" id="noteIn" aria-label="Add a note for the team" placeholder="Add a note for the team" maxlength="400"><button class="btn" id="noteAdd">${icon('plus')}Add</button></div>`;
   const addNote = () => { const t = $('#noteIn').value.trim(); if (!t) return; act(() => api(`projects/${p.id}/notes`, 'POST', { note: t })).then((np) => { S.project = np; renderProjects(); }); };
   $('#noteAdd').onclick = addNote;
   $('#noteIn').onkeydown = (e) => { if (e.key === 'Enter') addNote(); };
@@ -512,12 +567,12 @@ function renderInbox() {
     $('#iAdd').onclick = () => { S.sel.inbox = 'new'; renderInbox(); };
   }
   $('#iCnt').textContent = `${S.inbox.length} request${S.inbox.length === 1 ? '' : 's'}`;
-  $('#inList').innerHTML = S.inbox.length ? `<table><thead><tr><th>Ticket</th><th>Type</th><th>From</th><th>Source</th><th>Request</th><th>Who</th><th>Status</th><th>Received</th></tr></thead><tbody>
-    ${S.inbox.map((x) => { const w = staffById(x.assigned); return `<tr data-i="${esc(x.id)}" class="${S.sel.inbox === x.id ? 'sel' : ''}"><td class="mono">#${esc(x.ticket)}</td>
+  redraw($('#inList'), S.inbox.length ? `<table><thead><tr><th>Ticket</th><th>Type</th><th>From</th><th>Source</th><th>Request</th><th>Who</th><th>Status</th><th>Received</th></tr></thead><tbody>
+    ${S.inbox.map((x) => { const w = staffById(x.assigned); return `<tr data-i="${esc(x.id)}" tabindex="0" class="${S.sel.inbox === x.id ? 'sel' : ''}"><td class="mono">#${esc(x.ticket)}</td>
       <td><span style="color:${TYPE_COL[x.type] || 'var(--muted)'};font-weight:600">${esc(x.type || 'message')}</span></td><td>${esc(x.from)}</td><td class="muted">${esc(x.source)}</td>
       <td style="max-width:280px">${esc((x.text || '').split('\n')[0])}</td><td>${w ? `<span class="who">${av(w)}${esc(w.name)}</span>` : '<span class="faint">-</span>'}</td>
       <td><span class="badge ${esc(x.status)}">${esc(x.status || 'new')}</span></td><td class="muted">${when(x.received)}</td></tr>`; }).join('')}</tbody></table>`
-    : `<div class="empty"><b>The inbox is empty</b>Add a request by hand, or ask Claude to connect email, WhatsApp or your shop so requests arrive here by themselves.</div>`;
+    : `<div class="empty"><b>The inbox is empty</b>Add a request by hand, or ask Claude to connect email, WhatsApp or your shop so requests arrive here by themselves.</div>`);
   $$('#inList tr[data-i]').forEach((tr) => { tr.onclick = () => { S.sel.inbox = tr.dataset.i; renderInbox(); }; });
   if (!S.dirty.has('inbox')) renderInboxSide();
 }
@@ -543,7 +598,7 @@ function renderInboxSide() {
     };
     return;
   }
-  f.innerHTML = `<div class="ph"><span class="mono">#${esc(x.ticket)}</span><h3>${esc(x.from)}</h3><span class="badge ${esc(x.status)}">${esc(x.status)}</span><div class="acts"><button class="ibtn" data-x title="Close">${icon('x')}</button></div></div>
+  f.innerHTML = `<div class="ph"><span class="mono">#${esc(x.ticket)}</span><h3>${esc(x.from)}</h3><span class="badge ${esc(x.status)}">${esc(x.status)}</span><div class="acts"><button class="ibtn" data-x title="Close" aria-label="Close">${icon('x')}</button></div></div>
     <div class="pb form">
       <div class="grid2"><div><label class="lbl">Who handles it</label><select class="in" id="iWho"><option value="">Not assigned</option>${S.staff.map((s) => `<option value="${esc(s.id)}" ${x.assigned === s.id ? 'selected' : ''}>${esc(s.name)} (${esc(s.role)})</option>`).join('')}</select></div>
       <div><label class="lbl">Status</label><select class="in" id="iSt">${['new', 'working', 'waiting', 'done'].map((t) => `<option ${x.status === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div></div>
@@ -574,7 +629,7 @@ function renderSettings() {
   const inv = (S.office.addons || {})['invois-online'];
   const body = {
     general: `<h3 style="margin-bottom:12px">General</h3><div class="kv">
-      <span class="muted">Company</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input class="in" id="coName" maxlength="80" value="${esc(S.office.company)}" style="max-width:320px"><button class="btn sm" id="coSave">Save</button></span>
+      <span class="muted">Company</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input class="in" id="coName" aria-label="Company name" maxlength="80" value="${esc(S.office.company)}" style="max-width:320px"><button class="btn sm" id="coSave">Save</button></span>
       <span class="muted">Manager</span><span>${esc(pa().name)}</span>
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
       <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span></div>
@@ -607,7 +662,7 @@ function renderSettings() {
       <div style="display:flex;flex-direction:column;gap:10px;max-width:640px">${CLEAN.map(([k, on, l, d]) => `<label style="display:flex;gap:10px;align-items:flex-start;line-height:1.45"><input type="checkbox" name="cl" value="${k}" ${on ? 'checked' : ''} style="margin-top:3px"><span><b style="font-weight:600">${esc(l)}</b><br><span class="muted">${esc(d)}</span></span></label>`).join('')}</div>
       <div class="arcnote" style="margin:16px 0 0;max-width:640px">${icon('circle-alert')}<div>Cleared files cannot be brought back. Tip: copy the office folder first if you might need them.</div></div>
       <label class="lbl">Type <b>CLEAR</b> to confirm</label>
-      <div style="display:flex;gap:8px;max-width:640px"><input class="in" id="clConf" autocomplete="off" style="max-width:200px"><button class="btn dangerSolid" id="clGo" disabled>${icon('trash-2')}Clear selected</button></div>`,
+      <div style="display:flex;gap:8px;max-width:640px"><input class="in" id="clConf" aria-label="Type CLEAR to confirm" autocomplete="off" style="max-width:200px"><button class="btn dangerSolid" id="clGo" disabled>${icon('trash-2')}Clear selected</button></div>`,
   };
   $('#v-settings').innerHTML = `<div class="split"><div class="pane" style="flex:0 0 220px"><div class="pb" style="padding:8px">${nav.map(([k, ic, l]) => `<button class="snav ${S.settings === k ? 'on' : ''}" data-s="${k}">${icon(ic)}${l}</button>`).join('')}</div></div>
     <div class="gutter" data-side="prev" data-key="settings"></div><div class="pane" style="flex:1 1 auto"><div class="pb" style="padding:20px 24px;max-width:900px">${body[S.settings]}</div></div></div>`;
@@ -628,7 +683,7 @@ function renderSettings() {
   if ($('#actList')) {
     const showActs = (list) => {
       $('#actList').innerHTML = `<table style="max-width:640px"><tbody>${list.map((x) => `<tr style="cursor:default"><td>${esc(x.label)}</td><td style="text-align:right">
-        <select class="in" data-act="${esc(x.tool)}" style="width:auto"><option value="ask" ${x.always ? '' : 'selected'}>Ask me first</option><option value="always" ${x.always ? 'selected' : ''}>Always allow</option></select></td></tr>`).join('')}</tbody></table>`;
+        <select class="in" data-act="${esc(x.tool)}" aria-label="${esc(x.label)}" style="width:auto"><option value="ask" ${x.always ? '' : 'selected'}>Ask me first</option><option value="always" ${x.always ? 'selected' : ''}>Always allow</option></select></td></tr>`).join('')}</tbody></table>`;
       $$('[data-act]').forEach((sel) => { sel.onchange = () => act(() => api('actions', 'POST', { tool: sel.dataset.act, always: sel.value === 'always' }), sel.value === 'always' ? 'Set to Always allow' : 'Set to Ask me first').then(showActs); });
     };
     api('actions').then(showActs).catch((e) => { $('#actList').textContent = e.message; });
@@ -739,8 +794,8 @@ function renderLive(id, keepScroll) {
   if (!c.running) { el.innerHTML = ''; return; }
   const live = c.live || {};
   const secs = c.since ? Math.max(0, Math.round((Date.now() - c.since) / 1000)) : 0;
-  el.innerHTML = `${live.text ? `<div class="bm streaming">${markdown(live.text)}<span class="caret"></span></div>` : ''}
-    <div class="typing"><span class="dots"><i></i><i></i><i></i></span><span class="step">${esc(live.step || `${p.name} is starting`)}</span><span class="secs">${secs}s</span><button class="btn sm" data-stop="${esc(id)}">Stop</button></div>`;
+  redraw(el, `${live.text ? `<div class="bm streaming">${markdown(live.text)}<span class="caret"></span></div>` : ''}
+    <div class="typing"><span class="dots"><i></i><i></i><i></i></span><span class="step">${esc(live.step || `${p.name} is starting`)}</span><span class="secs">${secs}s</span><button class="btn sm" data-stop="${esc(id)}">Stop</button></div>`);
   if (atEnd || keepScroll) body.scrollTop = body.scrollHeight;
 }
 setInterval(() => { for (const [id, c] of Object.entries(C)) if (c.running && c.since) { const el = $(`.win[data-win="${id}"] .live .secs`); if (el) el.textContent = `${Math.round((Date.now() - c.since) / 1000)}s`; } }, 1000);
@@ -758,10 +813,10 @@ function renderChats() {
   document.documentElement.style.setProperty('--chat-w', `${reserve}px`);
   document.body.classList.toggle('chat-res', reserve > 0);
 
-  dock.innerHTML = people.map((p) => {
+  redraw(dock, people.map((p) => {
     const st = (S.status.people[p.id] || {}).status || 'sleeping', c = chatOf(p.id);
-    return `<div class="head ${shown.includes(p.id) ? 'open' : ''} ${c.running ? 'busy' : ''}" data-chat="${esc(p.id)}" style="--ring:${RING[st]}">${av(p)}${c.unread ? `<span class="ub">${c.unread}</span>` : ''}${p.id === 'pa' ? '<span class="mstar"><img src="assets/emoji/star.png" alt=""></span>' : ''}<span class="nmtip">${esc(p.name)}${p.id === 'pa' ? ' (Manager)' : ''} . ${SLAB[st]}</span></div>`;
-  }).join('');
+    return `<div class="head ${shown.includes(p.id) ? 'open' : ''} ${c.running ? 'busy' : ''}" data-chat="${esc(p.id)}" role="button" tabindex="0" aria-label="${esc(p.name)}${p.id === 'pa' ? ' (Manager)' : ''}, ${SLAB[st]}${c.unread ? `, ${c.unread} unread` : ''}" aria-pressed="${shown.includes(p.id)}" style="--ring:${RING[st]}">${av(p)}${c.unread ? `<span class="ub">${c.unread}</span>` : ''}${p.id === 'pa' ? '<span class="mstar"><img src="assets/emoji/star.png" alt=""></span>' : ''}<span class="nmtip">${esc(p.name)}${p.id === 'pa' ? ' (Manager)' : ''} . ${SLAB[st]}</span></div>`;
+  }).join(''));
 
   // keep windows (and what the boss is typing) between renders
   for (const w of $$('.win', wins)) if (!shown.includes(w.dataset.win)) w.remove();
@@ -770,7 +825,7 @@ function renderChats() {
     if (!w) {
       w = document.createElement('div'); w.className = 'win'; w.dataset.win = id;
       w.innerHTML = `<div class="wh" data-min="${esc(id)}"></div><div class="wstrips"></div><div class="wb"></div>
-        <div class="wf"><div class="box"><textarea rows="1" placeholder="Message ${esc(personOf(id).name)}..."></textarea><button class="btn pri send" title="Send">${icon('arrow-up')}</button></div>
+        <div class="wf"><div class="box"><textarea rows="1" aria-label="Message ${esc(personOf(id).name)}" placeholder="Message ${esc(personOf(id).name)}..."></textarea><button class="btn pri send" title="Send" aria-label="Send">${icon('arrow-up')}</button></div>
         ${id !== 'pa' ? `<div class="cc">${icon('eye')}${esc(pa().name)} gets a summary of this chat</div>` : ''}</div>`;
       const ta = $('textarea', w);
       const send = async () => { const t = ta.value; if (!t.trim()) return; ta.value = ''; ta.style.height = ''; if (!(await sendChat(id, t))) ta.value = t; };
@@ -795,10 +850,10 @@ function renderChats() {
     const p = personOf(id), c = chatOf(id);
     const st = c.running ? 'working' : ((S.status.people[id] || {}).status || 'sleeping');
     w.classList.toggle('min', V.min.includes(id));
-    $('.wh', w).innerHTML = `${av(p)}<b>${esc(p.name)}</b>${id === 'pa' ? MGR : ''}<span class="badge ${st}" style="height:18px;font-size:11px"><i class="d ${st}"></i>${SLAB[st]}</span><div class="acts"><button class="ibtn" data-newchat="${esc(id)}" title="New conversation (${esc(p.name)} starts fresh; this chat stays above)">${icon('refresh-cw')}</button><button class="ibtn" data-min="${esc(id)}" title="Minimise">${icon('minus')}</button><button class="ibtn" data-close="${esc(id)}" title="Close">${icon('x')}</button></div>`;
+    redraw($('.wh', w), `${av(p)}<b>${esc(p.name)}</b>${id === 'pa' ? MGR : ''}<span class="badge ${st}" style="height:18px;font-size:11px"><i class="d ${st}"></i>${SLAB[st]}</span><div class="acts"><button class="ibtn" data-newchat="${esc(id)}" title="New conversation (${esc(p.name)} starts fresh; this chat stays above)" aria-label="New conversation with ${esc(p.name)}">${icon('refresh-cw')}</button><button class="ibtn" data-min="${esc(id)}" title="Minimise" aria-label="Minimise">${icon('minus')}</button><button class="ibtn" data-close="${esc(id)}" title="Close" aria-label="Close">${icon('x')}</button></div>`);
     const waits = id === 'pa' ? [] : pendingOks().filter((a) => a.from === id);
     const work = id === 'pa' ? (S.tasks || []) : (S.tasks || []).filter((t) => t.staff === id || t.from === id); // their own work, and what they asked a colleague
-    $('.wstrips', w).innerHTML = workLine(work) + waits.map((a) => `<div class="wstrip">${icon('hand')}<div class="sq"><b>Waiting for your OK</b>${esc(a.action)}</div><button class="btn sm ok" data-ok="${esc(a.id)}" data-d="approved">Approve</button><button class="btn sm" data-ok="${esc(a.id)}" data-d="rejected">Reject</button></div>`).join('');
+    redraw($('.wstrips', w), workLine(work) + waits.map((a) => `<div class="wstrip">${icon('hand')}<div class="sq"><b>Waiting for your OK</b>${esc(a.action)}</div><button class="btn sm ok" data-ok="${esc(a.id)}" data-d="approved">Approve</button><button class="btn sm" data-ok="${esc(a.id)}" data-d="rejected">Reject</button></div>`).join(''));
     const body = $('.wb', w);
     const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
     const intro = id === 'pa' ? `${esc(p.name)} is your manager. Tell them what you need; they hand it to the right staff.` : `Direct chat with ${esc(p.name)} (${esc(p.role)}).`;
@@ -827,7 +882,7 @@ function workLine(work) {
     const t = work[0];
     return `<div class="wstrip work one" data-task="${esc(t.id)}">${icon('clock')}<div class="sq"><b>${esc(nameOfStaff(t.staff))}:</b> ${esc(t.title || t.id)}<span class="now">${esc(t.step || 'Starting')}</span></div><button class="btn sm" data-stoptask="${esc(t.id)}">Stop</button></div>`;
   }
-  return `<div class="wstrip work one link" data-work="open">${icon('clock')}<div class="sq"><b>${work.length} staff working:</b> ${esc(work.map((t) => nameOfStaff(t.staff)).join(', '))}</div><span class="more">Show</span></div>`;
+  return `<div class="wstrip work one link" data-work="open" role="button" tabindex="0">${icon('clock')}<div class="sq"><b>${work.length} staff working:</b> ${esc(work.map((t) => nameOfStaff(t.staff)).join(', '))}</div><span class="more">Show</span></div>`;
 }
 function renderWork() {
   let el = $('#work');
@@ -842,14 +897,14 @@ function renderWork() {
   const heads = [...new Set(work.map((t) => t.staff))].map(personOf).filter(Boolean).slice(0, 5).map((p) => av(p)).join('');
   const open = !office || !workMin;
   const label = [work.length ? `${work.length} working` : '', cut.length ? `${cut.length} interrupted` : ''].filter(Boolean).join(', ');
-  el.innerHTML = `<div class="wkh" data-work="${office ? 'fold' : 'close'}" title="${office ? (open ? 'Fold' : 'Show the list') : 'Close'}"><i class="d ${work.length ? 'working' : 'waiting'}"></i><b>${label}</b><span class="heads">${heads}</span>${icon(office ? 'chevron-down' : 'x')}</div>`
+  redraw(el, `<div class="wkh" data-work="${office ? 'fold' : 'close'}" role="button" tabindex="0" aria-expanded="${open}" title="${office ? (open ? 'Fold' : 'Show the list') : 'Close'}"><i class="d ${work.length ? 'working' : 'waiting'}"></i><b>${label}</b><span class="heads">${heads}</span>${icon(office ? 'chevron-down' : 'x')}</div>`
     + (open ? `<div class="wkl">${work.map((t) => {
       const p = personOf(t.staff) || { name: t.staff }, asked = t.from && t.from !== 'pa' && t.from !== t.staff ? personOf(t.from) : null;
       return `<div class="wk" data-task="${esc(t.id)}">${p.colour ? av(p) : ''}<div class="sq"><div class="l1"><b>${esc(p.name)}</b><span class="faint">${since(t.created)}</span></div><div class="ti">${esc(t.title || t.id)}${asked ? ` <span class="faint">(asked by ${esc(asked.name)})</span>` : ''}</div><span class="now">${esc(t.step || 'Starting')}</span></div><button class="btn sm" data-stoptask="${esc(t.id)}">Stop</button></div>`;
     }).join('')}${cut.length ? `<div class="wkcut">Stopped by a restart</div>${cut.map((t) => {
       const p = personOf(t.staff) || { name: t.staff };
       return `<div class="wk cut">${p.colour ? av(p, 'grey') : ''}<div class="sq"><div class="l1"><b>${esc(p.name)}</b><span class="faint">${t.finished ? when(t.finished) : ''}</span></div><div class="ti">${esc(t.title || t.id)}</div></div><div class="wkb"><button class="btn sm ok" data-rerun="${esc(t.id)}">Run again</button><button class="btn sm" data-dismiss="${esc(t.id)}">Dismiss</button></div></div>`;
-    }).join('')}` : ''}</div>` : '');
+    }).join('')}` : ''}</div>` : ''));
 }
 document.addEventListener('click', (e) => {
   const r = e.target.closest('[data-rerun],[data-dismiss]'); if (!r) return;
@@ -873,7 +928,7 @@ function renderUsage() {
   const u = S.usage || {}, L = u.limits || {}, five = L.five_hour, week = L.seven_day, today = (u.today || { tokens: 0, cost: 0, people: {} });
   const meter = (label, w) => (w ? `<span class="um ${level(w.used)}"><b>${label}</b><i><s style="width:${Math.min(100, w.used)}%"></s></i>${w.used}%</span>` : '');
   const worst = Math.max(five ? five.used : 0, week ? week.used : 0);
-  const bar = `<div class="ubar ${level(worst)}${usageOpen ? ' open' : ''}" title="Claude plan use. Click for details.">${five || week ? meter('5h', five) + meter('Week', week) : '<span class="faint">Plan use shows after the first chat or task</span>'}${five && five.resets ? `<span class="faint">resets ${until(five.resets)}</span>` : ''}<span class="sep2"></span><span>Today <b>${fmtN(today.tokens)}</b> tokens</span>${icon('chevron-down')}</div>`;
+  const bar = `<div class="ubar ${level(worst)}${usageOpen ? ' open' : ''}" data-usage="plan" role="button" tabindex="0" aria-expanded="${usageOpen}" title="Claude plan use. Click for details.">${five || week ? meter('5h', five) + meter('Week', week) : '<span class="faint">Plan use shows after the first chat or task</span>'}${five && five.resets ? `<span class="faint">resets ${until(five.resets)}</span>` : ''}<span class="sep2"></span><span>Today <b>${fmtN(today.tokens)}</b> tokens</span>${icon('chevron-down')}</div>`;
   let panel = '';
   if (usageOpen) {
     const lim = (label, w) => (w ? `<div class="ul"><div class="ulh"><b>${label}</b><span>${w.used}% used</span><span class="faint">${w.resets ? `resets in ${until(w.resets)}` : ''}</span></div><i class="${level(w.used)}"><s style="width:${Math.min(100, w.used)}%"></s></i></div>` : '');
@@ -884,7 +939,7 @@ function renderUsage() {
       ${table('Today', today)}${table('Last 7 days', u.week || {})}
       <div class="faint unote">Counts chats and staff tasks run from this dashboard. Cost is the API price; on a Claude subscription you are not billed this.</div></div>`;
   }
-  el.innerHTML = panel + bar;
+  redraw(el, panel + bar);
 }
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-work],#stat');
@@ -947,7 +1002,7 @@ function live() {
     S.status = JSON.parse(e.data);
     renderTop();
     if (S.view === 'office') renderOffice();
-    if (S.view === 'staff' && $('#staffList')) renderStaff();
+    if (S.view === 'staff' && $('#staffList')) renderStaff(true);
     renderChats();
   });
   es.addEventListener('chat', (e) => {
@@ -985,7 +1040,7 @@ function live() {
   });
   es.onopen = () => { fails = 0; if (bar) { bar.remove(); bar = null; load().then(render); } };
   es.onerror = () => {
-    if (++fails >= 2 && !bar) { bar = document.createElement('div'); bar.className = 'offline'; bar.textContent = 'The office server stopped. Start it again from the office folder, then this page reconnects.'; document.body.append(bar); }
+    if (++fails >= 2 && !bar) { bar = document.createElement('div'); bar.className = 'offline'; bar.setAttribute('role', 'alert'); bar.textContent = 'The office server stopped. Start it again from the office folder, then this page reconnects.'; document.body.append(bar); }
   };
 }
 

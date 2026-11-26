@@ -119,7 +119,7 @@ body.dragging{user-select:none;cursor:col-resize}
 .in{width:100%;height:32px;border:1px solid var(--line);border-radius:var(--rs);padding:0 10px;background:var(--panel)}
 textarea.in{height:auto;padding:8px 10px;resize:vertical;line-height:1.5}
 select.in{padding:0 6px}
-.in:focus{outline:2px solid var(--acc-soft);border-color:var(--acc)}
+.in:focus{outline:2px solid var(--acc);border-color:var(--acc)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .swatches{display:flex;gap:6px;flex-wrap:wrap}
 .swatches i{width:22px;height:22px;border-radius:var(--rs);cursor:pointer}
@@ -265,7 +265,7 @@ code{font-family:ui-monospace,"Cascadia Mono",Consolas,Menlo,monospace;font-size
 .head .mstar{position:absolute;left:-4px;bottom:-4px;width:22px;height:22px;border-radius:50%;background:#1B1D29;border:2px solid #1B1D29;display:flex;align-items:center;justify-content:center}
 .head .mstar img{width:13px;height:13px}
 .head .nmtip{position:absolute;right:56px;top:50%;transform:translateY(-50%);background:var(--text);color:var(--on-solid);font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:var(--rs);white-space:nowrap;display:none}
-.head:hover .nmtip{display:block}
+.head:hover .nmtip,.head:focus-visible .nmtip{display:block}
 .head.busy:after{content:"";position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;background:var(--green);border:2px solid var(--panel)}
 #wins{position:fixed;right:76px;bottom:0;display:flex;flex-direction:row-reverse;align-items:flex-end;gap:10px;z-index:50;transition:right .25s ease}
 body.ok-open #dock{right:394px}
@@ -309,6 +309,7 @@ body.ok-open #wins{right:456px}
 .wf{flex:none;border-top:1px solid var(--line2);padding:8px}
 .wf .box{display:flex;align-items:flex-end;gap:6px;border:1px solid var(--line);border-radius:var(--r);padding:5px 5px 5px 10px}
 .wf textarea{flex:1;border:0;outline:0;resize:none;line-height:1.45;max-height:120px;min-height:20px;background:transparent}
+.wf .box:focus-within{border-color:var(--acc);outline:2px solid var(--acc);outline-offset:1px}
 .wf .send{height:26px;width:28px;padding:0;justify-content:center}
 .wf .cc{font-size:10.5px;color:var(--faint);margin-top:5px;display:flex;align-items:center;gap:4px}
 .wf .cc svg.ic{width:11px;height:11px}
@@ -443,4 +444,33 @@ select.in{height:30px;padding:0 6px;background:var(--panel)}
   .tab .tl,.stat .tl{display:none}
   .tab{padding:0 9px}
   .sub .hint,.legend2{display:none}
+}
+
+/* accessibility: keyboard focus, screen-reader-only text, reduced motion, touch hit areas */
+/* keyboard focus ring: purple on light surfaces, white on the purple bars */
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.top :focus-visible,.okhead :focus-visible{outline-color:#fff}
+.tab:focus-visible,.row:focus-visible,.ubar:focus-visible,.wkh:focus-visible,.wstrip.link:focus-visible{outline-offset:-2px}
+.head:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
+.swatches i:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+.swatches i.on:focus-visible{outline-offset:5px}
+tr[tabindex]:focus-visible{outline:none}
+tr[tabindex]:focus-visible td{box-shadow:inset 0 2px 0 var(--acc),inset 0 -2px 0 var(--acc)}
+.ov .tag[data-id]:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+/* reduced motion: no slides, no blinking, no scrolling status text (the marquee shows the start of the text) */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
+  .typing .dots i,.caret,.ov .tag[data-id] .pill .mq > span{animation:none !important}
+}
+/* touch screens: hit areas reach 44px tall without changing the layout (the ::after extends the button) */
+@media (pointer:coarse){
+  .ibtn,.btn,.seg button,.snav,.swatches i,.ubar{position:relative}
+  .ibtn::after,.btn::after,.seg button::after,.snav::after,.swatches i::after,.ubar::after,.okbtn::after{content:"";position:absolute;left:0;right:0;top:-8px;bottom:-8px}
+  .btn::after{top:-9px;bottom:-9px}
+  .btn.sm::after,.swatches i::after{top:-11px;bottom:-11px}
+  .seg button::after{top:-10px;bottom:-10px}
+  .wh .ibtn::after{top:-9px;bottom:-9px}
+  .zoom .ibtn::after{top:-10px;bottom:-10px}
+  .snav::after,.okbtn::after,.ubar::after{top:-6px;bottom:-6px}
 }
