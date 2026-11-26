@@ -26,7 +26,8 @@ const STAFF = [{ id: 's0', name: 'Cust', role: 'Customer Support', colour: '#FF9
 const PA = { id: 'pa', name: 'Fiya', colour: '#8338EC', look: { scarf: true, skin: '#F2C9A0' } };
 const D = 11.5;
 // values captured from e32ccf8 (before the quarter-turn change)
-const BASE_ROWS_SHA = '278d7f6c31730fabac680f8277221b1499b23aecff331b072d4492cf079f0703';
+// Stage 1 scene (e32ccf8 + quarter turns) had 278d7f6c...; the booth plant moved off the booth route, so only that object differs
+const BASE_ROWS_SHA = 'b300156a9d2efdfd8cf93208d49b57062b804ad546a1eb158046caf44bf9f8b4';
 const BASE_ROUTES_SHA = '4d71e1662f344ed6d37ea723572d556925fd416da7594793c5f238f24d0e93d6';
 const BASE_SEATS = { pa: [2.65, 4.93], s1: [5.55, 3.9800000000000004], s2: [8.65, 3.9800000000000004], s3: [11.75, 3.9800000000000004], s4: [5.55, 6.53], s5: [8.65, 6.53], s6: [11.75, 6.53], s7: [5.55, 9.08], s0: [2.6, 12.85], you: [2.1, 0.92] };
 const sha = (s) => createHash('sha256').update(s).digest('hex');
@@ -137,7 +138,7 @@ test('route check: PA and desk routes cross no furniture', async () => {
   console.log(`route check (desks): ${boxes.length} obstacles, min clearance ${minClear.toFixed(3)} m`);
 });
 // Known finding, not a pass: the booth route (y 12.55, x 3.6 to 6.3) runs into the plant at (5.45, 12.25). Stage 2 must clear this.
-test('route check: booth route crosses the booth plant (known finding, recorded)', async () => {
+test('route check: booth route is clear of the booth plant', async () => {
   const built = await build();
   const boxes = obstaclesOf(built.root);
   const rigs = routedRigs(built);
@@ -145,7 +146,7 @@ test('route check: booth route crosses the booth plant (known finding, recorded)
   for (const f of rigs) for (const t of rigs) if (f !== t && (f.id === 's0' || t.id === 's0')) {
     for (const c of checkRoute(office.routePoints(f, t, D), boxes).crossings) hit.add([c.box.x0, c.box.x1, c.box.y0, c.box.y1].map((v) => v.toFixed(2)).join(','));
   }
-  assert.deepEqual([...hit].sort(), ['5.02,5.52,12.11,12.61', '5.13,5.77,11.93,12.57', '5.39,5.78,12.25,12.65']);
+  assert.deepEqual([...hit].sort(), []);
 });
 test('route check helper is not vacuous: a segment through a desk is reported', async () => {
   const built = await build();

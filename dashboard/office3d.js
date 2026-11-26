@@ -501,7 +501,7 @@ export async function buildOffice(opt = {}) {
   planeZ(1.2, 5.0, 0.42, 0.86, CY + 1.455, texMat(csTex, { transparent: true }));
   laptop(fr(0, 0), 1.6, CY + 0.6, 1.13);
   SPH(4.6, CY + 1.15, 1.13, 0.1, '#FFC53D', { m: 0.6, r: 0.3 }); CYL(4.6, CY + 1.15, 1.13, 0.13, 0.13, 0.02, '#C98B4F', 16);
-  plant(5.45, D + 0.75, 0.9);
+  plant(5.7, D + 3.4, 0.9); // off the booth route (the lane runs at y D + 1.05)
 
   // ---------------- team desks ----------------
   // the PA (manager) sits just outside the boss room, between the boss and the team
