@@ -159,13 +159,15 @@ function renderSub() {
   const t = {
     office: `<span class="livebadge"><i class="d working"></i>Live</span><span class="legend2"><span><i class="d working"></i>Working</span><span><i class="d sleeping"></i>Sleeping</span><span><i class="d waiting"></i>Waiting for OK</span></span>
       <span class="faint hint" style="margin-left:10px">Click anyone to chat. Drag to move, scroll to zoom.</span>
-      <div class="zoom"><button class="ibtn" id="zOut" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><span id="zPct">${Math.round(V.zoom * 100)}%</span><button class="ibtn" id="zIn" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="ibtn" id="zFit" title="Fit to screen" aria-label="Fit to screen">${icon('maximize')}</button></div>`,
+      <div class="zoom"><button class="ibtn" id="zOut" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><span id="zPct">${Math.round(V.zoom * 100)}%</span><button class="ibtn" id="zIn" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button><button class="ibtn" id="zFit" title="Fit to screen" aria-label="Fit to screen">${icon('maximize')}</button></div><button class="okbtn" id="okStat"></button>`,
     staff: `<b>Team</b><span class="muted">${esc(pa().name)} + ${S.staff.length} staff. Changes save to each staff's CLAUDE.md.</span>`,
     projects: `<b>Projects</b><span class="muted">One folder per project, each with its own notes that staff read before working.</span>`,
     inbox: `<b>Inbox</b><span class="muted">Customer requests waiting for your team. One file each in inbox/.</span>`,
     settings: `<b>Settings</b><span class="muted">Saved in office.json in your office folder.</span>`,
   };
+  const hadPillFocus = document.activeElement?.id === 'okStat'; // the pill is rebuilt on each render: keep keyboard focus on it
   $('#sub').innerHTML = t[S.view];
+  if (hadPillFocus) $('#okStat')?.focus();
   if (S.view === 'office') {
     $('#zIn').onclick = () => zoomAt(V.zoom * 1.25);
     $('#zOut').onclick = () => zoomAt(V.zoom / 1.25);
@@ -205,7 +207,7 @@ let office3d = null, scene = null, sceneKey = '', building = false, again = fals
 function renderOffice() {
   const v = $('#v-office');
   if (!$('#officeWrap', v)) {
-    v.innerHTML = `<div class="officeWrap live" id="officeWrap"><button class="okbtn" id="okStat"></button><div id="termBar"></div>
+    v.innerHTML = `<div class="officeWrap live" id="officeWrap"><div id="termBar"></div>
       <div class="officeStage" id="officeStage"></div><div class="loading" id="oLoad">Opening the office...</div></div>`;
     wireOffice();
   }
@@ -319,8 +321,9 @@ function renderOkButton() {
   const b = $('#okStat'); if (!b) return;
   const n = pendingOks().length;
   b.className = `okbtn${S.okOpen ? ' on' : ''}${n ? '' : ' clear'}`;
-  b.innerHTML = n ? `${icon('hand')}<b>${n}</b> need your OK${icon(S.okOpen ? 'chevron-right' : 'chevron-left')}`
-    : `${icon('check')}All clear${icon(S.okOpen ? 'chevron-right' : 'chevron-left')}`;
+  b.setAttribute('aria-label', n ? `${n} need your OK` : 'All clear'); // the label span hides at 639px and below
+  b.innerHTML = n ? `${icon('hand')}<b>${n}</b><span class="oklbl"> need your OK</span>${icon(S.okOpen ? 'chevron-right' : 'chevron-left')}`
+    : `${icon('check')}<span class="oklbl">All clear</span>${icon(S.okOpen ? 'chevron-right' : 'chevron-left')}`;
 }
 function okItem(a) {
   const who = staffById(a.from);
