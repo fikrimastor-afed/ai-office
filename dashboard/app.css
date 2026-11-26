@@ -46,17 +46,19 @@ input,textarea,select{font:inherit;color:inherit}
 .d.working{background:var(--green)}.d.sleeping{background:var(--grey)}.d.waiting{background:var(--amber)}
 
 /* top bar (solid colour) */
-.top{height:46px;display:flex;align-items:center;gap:20px;padding:0 14px;background:var(--bar);color:#fff}
-.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;letter-spacing:-.01em;white-space:nowrap}
+.top{height:46px;display:flex;align-items:center;gap:20px;padding:0 14px;background:var(--bar);color:#fff;overflow:hidden}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;letter-spacing:-.01em;white-space:nowrap;flex:none}
 .logo img{width:20px;height:20px}
 .logo .co{font-weight:500;color:rgba(255,255,255,.72);padding-left:10px;border-left:1px solid rgba(255,255,255,.25)}
-.tabs{display:flex;height:100%;gap:2px}
+.tabs{display:flex;height:100%;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none}
 .tab{display:flex;align-items:center;gap:7px;padding:0 12px;height:100%;font-weight:500;color:rgba(255,255,255,.72);border-bottom:2px solid transparent}
 .tab:hover{color:#fff}
 .tab.on{color:#fff;font-weight:600;border-bottom-color:#fff}
 .tab .n{font-size:11px;font-weight:600;background:rgba(255,255,255,.18);border-radius:var(--rs);padding:0 5px;line-height:17px}
 .tab .n.warn{background:#FFB020;color:#3B2600}
-.right{margin-left:auto;display:flex;align-items:center;gap:14px}
+.right{margin-left:auto;display:flex;align-items:center;gap:14px;flex:none}
 .stat{display:flex;align-items:center;gap:6px;font-weight:500;color:rgba(255,255,255,.78)}
 .stat b{color:#fff;font-weight:600}
 .sep{width:1px;height:20px;background:rgba(255,255,255,.25)}
@@ -67,14 +69,16 @@ input,textarea,select{font:inherit;color:inherit}
 .top .ibtn:hover{background:rgba(255,255,255,.14);color:#fff}
 
 /* second row */
-.sub{height:34px;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;transition:margin-right .25s ease}
+.sub{height:34px;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;transition:margin-right .25s ease;overflow:hidden;white-space:nowrap}
+.sub>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub>.livebadge,.sub>.zoom{flex:none}
 .sub b{font-weight:600}
 
 /* views and split panes */
 .view{position:absolute;top:80px;left:0;right:0;bottom:0;padding:8px;display:none;transition:right .25s ease}
 /* pages end above the chat bar (a minimised chat is 40px) and left of the chat avatars, so their buttons stay clickable; the office can sit behind them */
-.view:not(#v-office){bottom:44px;right:66px}
-body.ok-open .view:not(#v-office){right:446px}
+.view:not(#v-office){bottom:44px;right:calc(66px + var(--chat-w,0px))}
+body.ok-open .view:not(#v-office){right:calc(446px + var(--chat-w,0px))}
 .view.on{display:flex}
 body.ok-open .view{right:380px}
 body.ok-open .sub{margin-right:380px}
@@ -194,6 +198,7 @@ tr.sel td,tr.sel:hover td{background:var(--acc-soft)}
 /* approvals: floating button (Office view) + drawer that pushes the page */
 .okbtn{position:absolute;top:12px;right:12px;z-index:5;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 9px;border-radius:var(--rs);border:1px solid var(--bar);background:var(--bar);color:#fff;font-weight:600;font-size:12.5px}
 .okbtn:hover{filter:brightness(1.12)}
+body.chat-res .okbtn{right:calc(84px + var(--chat-w,0px))} /* left of the chat windows, which take the right edge */
 .okbtn b{min-width:20px;height:20px;border-radius:10px;background:#FFB020;color:#3B2600;font-size:11.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 6px}
 .okbtn.on{background:#fff;color:var(--bar)}
 .okbtn.on:hover{filter:none;background:var(--acc-soft)}
@@ -417,3 +422,25 @@ select.in{height:30px;padding:0 6px;background:var(--panel)}
 .wkcut{padding:6px 12px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--amber);background:var(--warn-bg2);border-bottom:1px solid var(--line2)}
 .wk.cut .wkb{display:flex;flex-direction:column;gap:4px}
 .wk.cut .ti{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* responsive layout. 1199: top bar drops the company name, host and separator. 1099: split panes stack (list above detail) and the staff "Now doing" column goes.
+   639: phone. Tabs and stat become icon/number only, the office hint and legend go. Chat windows reserve page width from 1200px up (see --chat-w in renderChats). */
+:root{--chat-w:0px}
+.stafftbl{min-width:560px}
+@media (max-width:1199px){
+  .top{gap:12px}
+  .co,#where,.sep{display:none}
+}
+@media (max-width:1099px){
+  .split{flex-direction:column;overflow-y:auto}
+  .split>.pane{flex:none !important;height:auto}
+  .split>.gutter{display:none}
+  .stafftbl th:nth-child(4),.stafftbl td:nth-child(4){display:none}
+}
+@media (max-width:639px){
+  .top{gap:8px;padding:0 10px}
+  .right{gap:8px}
+  .tab .tl,.stat .tl{display:none}
+  .tab{padding:0 9px}
+  .sub .hint,.legend2{display:none}
+}

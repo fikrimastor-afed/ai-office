@@ -94,10 +94,10 @@ function renderTop() {
   const activeP = S.projects.filter((p) => p.status !== 'done').length;
   const tabs = [['office', 'layout-grid', 'Office', ''], ['staff', 'users', 'Staff', S.staff.length],
     ['projects', 'folder', 'Projects', activeP || ''], ['inbox', 'inbox', 'Inbox', newIn || '']];
-  $('#tabs').innerHTML = tabs.map(([v, ic, label, n]) => `<button class="tab ${S.view === v ? 'on' : ''}" data-go="${v}">${icon(ic)}${label}${n !== '' ? ` <span class="n ${v === 'inbox' ? 'warn' : ''}">${n}</span>` : ''}</button>`).join('');
+  $('#tabs').innerHTML = tabs.map(([v, ic, label, n]) => `<button class="tab ${S.view === v ? 'on' : ''}" data-go="${v}" aria-label="${label}" title="${label}">${icon(ic)}<span class="tl">${label}</span>${n !== '' ? ` <span class="n ${v === 'inbox' ? 'warn' : ''}">${n}</span>` : ''}</button>`).join('');
   const st = Object.values(S.status.people);
   const cnt = (k) => st.filter((x) => x.status === k).length;
-  $('#stat').innerHTML = `<span class="d working" style="background:#4ADE80"></span><b>${cnt('working')}</b> working <span class="d" style="background:rgba(255,255,255,.55);margin-left:8px"></span><b>${cnt('sleeping')}</b> sleeping${cnt('waiting') ? ` <span class="d" style="background:#FFB020;margin-left:8px"></span><b>${cnt('waiting')}</b> waiting` : ''}`;
+  $('#stat').innerHTML = `<span class="d working" style="background:#4ADE80"></span><b>${cnt('working')}</b><span class="tl"> working</span> <span class="d" style="background:rgba(255,255,255,.55);margin-left:8px"></span><b>${cnt('sleeping')}</b><span class="tl"> sleeping</span>${cnt('waiting') ? ` <span class="d" style="background:#FFB020;margin-left:8px"></span><b>${cnt('waiting')}</b><span class="tl"> waiting</span>` : ''}`;
   $('#where').textContent = location.host;
   $('#gear').innerHTML = icon('settings');
 }
@@ -105,7 +105,7 @@ function renderTop() {
 function renderSub() {
   const t = {
     office: `<span class="livebadge"><i class="d working"></i>Live</span><span class="legend2"><span><i class="d working"></i>Working</span><span><i class="d sleeping"></i>Sleeping</span><span><i class="d waiting"></i>Waiting for OK</span></span>
-      <span class="faint" style="margin-left:10px">Click anyone to chat. Drag to move, scroll to zoom.</span>
+      <span class="faint hint" style="margin-left:10px">Click anyone to chat. Drag to move, scroll to zoom.</span>
       <div class="zoom"><button class="ibtn" id="zOut" title="Zoom out">${icon('minus')}</button><span id="zPct">${Math.round(V.zoom * 100)}%</span><button class="ibtn" id="zIn" title="Zoom in">${icon('plus')}</button><button class="ibtn" id="zFit" title="Fit to screen">${icon('maximize')}</button></div>`,
     staff: `<b>Team</b><span class="muted">${esc(pa().name)} + ${S.staff.length} staff. Changes save to each staff's CLAUDE.md.</span>`,
     projects: `<b>Projects</b><span class="muted">One folder per project, each with its own notes that staff read before working.</span>`,
@@ -143,7 +143,9 @@ function render() {
 // (Ctrl+Shift+R) or a new tab starts at the default: zoomed in a little.
 const VKEY = 'aio.view';
 if ($('meta[name="fresh"]').content === '1') sessionStorage.removeItem(VKEY);
+const firstVisit = !sessionStorage.getItem(VKEY);
 const V = Object.assign({ zoom: 1.4, panX: 0, panY: 0, open: ['pa'], min: [] }, JSON.parse(sessionStorage.getItem(VKEY) || '{}'));
+if (firstVisit && innerWidth < 1200) V.min = ['pa']; // narrow screens: the manager chat starts as a bar so it does not cover the page
 const saveView = () => sessionStorage.setItem(VKEY, JSON.stringify(V));
 let office3d = null, scene = null, sceneKey = '', building = false, again = false;
 
@@ -317,7 +319,7 @@ function renderStaff() {
     const LAB = { working: 'Working', sleeping: 'Sleeping', waiting: 'Waiting for OK' };
     const stCells = (id) => { const x = S.status.people[id] || { status: 'sleeping' };
       return `<td><span class="badge ${x.status}"><i class="d ${x.status}"></i>${LAB[x.status]}</span></td><td class="muted" style="max-width:260px">${esc(x.status === 'working' ? taskText(id, x.task) : '') || '-'}</td><td class="muted">${x.last ? when(x.last) : '-'}</td>`; };
-    $('#staffList').innerHTML = `<table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Now doing</th><th>Last active</th></tr></thead><tbody>
+    $('#staffList').innerHTML = `<table class="stafftbl"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Now doing</th><th>Last active</th></tr></thead><tbody>
       <tr data-who="pa" class="${S.sel.staff === 'pa' ? 'sel' : ''}"><td><span class="who">${paAv()}${esc(pa().name)} ${MGR}</span></td><td>Manager</td>${stCells('pa')}</tr>
       ${S.staff.map((s) => `<tr data-who="${esc(s.id)}" class="${S.sel.staff === s.id ? 'sel' : ''}" title="${esc(s.job)}"><td><span class="who">${av(s)}${esc(s.name)}</span></td><td><span style="display:inline-flex;align-items:center;gap:6px"><i class="d" style="border-radius:2px;background:${esc(s.colour)}"></i>${esc(s.role)}</span>${invChip(s.id)}</td>${stCells(s.id)}</tr>`).join('')}
       </tbody></table>`;
@@ -749,8 +751,12 @@ function renderChats() {
   if (!wins) { wins = document.createElement('div'); wins.id = 'wins'; document.body.append(wins); }
   const people = [personOf('pa'), ...S.staff];
   V.open = V.open.filter((id) => personOf(id));
-  const maxWin = Math.max(1, Math.floor((innerWidth - 90 - (S.okOpen ? 380 : 0)) / 430));
+  // a window is 430px wide. On desktop (1200px+) the windows take that room from the page, and the page keeps 480px; below that they overlay it.
+  const maxWin = Math.max(1, Math.floor((innerWidth - 66 - (S.okOpen ? 380 : 0) - 480) / 430));
   const shown = V.open.slice(0, maxWin);
+  const reserve = innerWidth >= 1200 ? shown.length * 430 : 0;
+  document.documentElement.style.setProperty('--chat-w', `${reserve}px`);
+  document.body.classList.toggle('chat-res', reserve > 0);
 
   dock.innerHTML = people.map((p) => {
     const st = (S.status.people[p.id] || {}).status || 'sleeping', c = chatOf(p.id);
