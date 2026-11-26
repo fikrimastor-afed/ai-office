@@ -708,10 +708,14 @@ const personOf = (id) => (id === 'pa' ? { id: 'pa', name: pa().name, colour: pa(
 const RING = { working: 'var(--green)', sleeping: '#C9CDD8', waiting: 'var(--amber)' };
 const SLAB = { working: 'Working', sleeping: 'Sleeping', waiting: 'Waiting for OK' };
 
+// One expanded chat at a time: id opens, every other open chat is minimised (its conversation stays).
+function focusChat(id) {
+  V.open = [id, ...V.open.filter((x) => x !== id)];
+  V.min = V.open.filter((x) => x !== id);
+}
 async function openChat(id, draft) {
   if (!personOf(id)) return;
-  V.min = V.min.filter((x) => x !== id);
-  V.open = [id, ...V.open.filter((x) => x !== id)];
+  focusChat(id);
   const c = chatOf(id); c.unread = 0;
   saveView(); renderChats();
   if (!c.loaded) { const h = await api(`chat/${id}`).catch(() => null); if (h) { c.messages = h.messages; c.running = h.running; c.loaded = true; renderChats(); } }
@@ -719,7 +723,11 @@ async function openChat(id, draft) {
   if (ta) { if (draft) { ta.value = draft; ta.setSelectionRange(draft.length, draft.length); } ta.focus(); }
 }
 function closeChat(id) { V.open = V.open.filter((x) => x !== id); V.min = V.min.filter((x) => x !== id); saveView(); renderChats(); }
-function toggleMin(id) { V.min = V.min.includes(id) ? V.min.filter((x) => x !== id) : [...V.min, id]; if (!V.min.includes(id)) chatOf(id).unread = 0; saveView(); renderChats(); }
+function toggleMin(id) {
+  if (V.min.includes(id)) focusChat(id); else V.min = [...V.min, id];
+  if (!V.min.includes(id)) chatOf(id).unread = 0;
+  saveView(); renderChats();
+}
 
 async function sendChat(id, text) {
   const t = String(text || '').trim(); if (!t) return;
@@ -805,11 +813,16 @@ function renderChats() {
   if (!dock) { dock = document.createElement('div'); dock.id = 'dock'; document.body.append(dock); }
   if (!wins) { wins = document.createElement('div'); wins.id = 'wins'; document.body.append(wins); }
   const people = [personOf('pa'), ...S.staff];
+  // at most one expanded window: the first open chat that is not minimised; the rest stay open as bars
   V.open = V.open.filter((id) => personOf(id));
-  // a window is 430px wide. On desktop (1200px+) the windows take that room from the page, and the page keeps 480px; below that they overlay it.
-  const maxWin = Math.max(1, Math.floor((innerWidth - 66 - (S.okOpen ? 380 : 0) - 480) / 430));
-  const shown = V.open.slice(0, maxWin);
-  const reserve = innerWidth >= 1200 ? shown.length * 430 : 0;
+  V.min = V.min.filter((id) => V.open.includes(id));
+  const exp = V.open.find((id) => !V.min.includes(id));
+  if (exp) V.open = [exp, ...V.open.filter((id) => id !== exp)];
+  V.min = V.open.filter((id) => id !== exp);
+  saveView();
+  const shown = V.open;
+  // the expanded window is 430px wide. On desktop (1200px+) it takes that room from the page; below that it overlays the page.
+  const reserve = innerWidth >= 1200 && exp ? 430 : 0;
   document.documentElement.style.setProperty('--chat-w', `${reserve}px`);
   document.body.classList.toggle('chat-res', reserve > 0);
 
@@ -979,7 +992,12 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-go],[data-oktoggle],#okStat,[data-ok]');
   if (!t) return;
   if (t.dataset.go) go(t.dataset.go);
-  else if (t.id === 'okStat' || t.hasAttribute('data-oktoggle')) { S.okOpen = !S.okOpen; renderOk(); renderChats(); }
+  else if (t.id === 'okStat' || t.hasAttribute('data-oktoggle')) {
+    // the pill is hidden while the drawer is open, so focus goes to the drawer on open and back to the pill on close
+    S.okOpen = !S.okOpen; renderOk(); renderChats();
+    const dr = $('#okDrawer'); dr.tabIndex = -1;
+    if (S.okOpen) dr.focus(); else ($('#okStat') || document.body).focus();
+  }
   else if (t.dataset.ok) {
     t.disabled = true;
     act(() => api(`approvals/${encodeURIComponent(t.dataset.ok)}/decide`, 'POST', { decision: t.dataset.d }), t.dataset.d === 'approved' ? 'Approved. The staff will see it.' : 'Rejected.')
