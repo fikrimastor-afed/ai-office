@@ -7,6 +7,19 @@ import { markdown } from './markdown.js';
 const KEY = document.querySelector('meta[name="office-key"]').content;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+// Add-on cards (ids match lib/defaults.js ADDONS; the browser cannot load that file). Invois keeps its icon and wording.
+const ADDON_CARDS = [
+  { id: 'invois-online', name: 'invois.online', chip: 'Invois', title: 'Invois Online', img: 'assets/invois-icon.png',
+    about: 'Real quotations, invoices and payments for your sales and finance staff. Made by the team behind AI Office.',
+    login: 'log in to invois.online', off: `Free plan: 60 documents a month. To connect, ask Claude in the office folder: <i>"connect the invois.online MCP for my sales and finance staff"</i>.`,
+    btn: ['Create free account', 'https://invois.online/?ref=ai-office'] },
+  { id: 'github', name: 'GitHub', chip: 'GitHub', title: 'GitHub', about: 'Read code, issues and pull requests for your engineers, architect and QA. Read only for now.',
+    login: 'log in to GitHub', off: 'To connect, ask Claude in the office folder: <i>"connect the GitHub MCP for my engineers"</i>.', btn: ['About the GitHub MCP', 'https://github.com/github/github-mcp-server'] },
+  { id: 'figma', name: 'Figma', chip: 'Figma', title: 'Figma', about: 'Your designer works in Figma; engineers and the architect read the designs.',
+    login: 'log in to Figma', off: 'To connect, ask Claude in the office folder: <i>"connect the Figma MCP for my designer"</i>.', btn: ['Open Figma', 'https://www.figma.com/'] },
+  { id: 'context7', name: 'Context7', chip: 'Context7', title: 'Context7', about: 'Current library documentation for every staff, so they use real APIs. Read only, no login needed.',
+    off:'To connect, ask Claude in the office folder: <i>"connect the Context7 MCP for my staff"</i>.', btn: ['About Context7', 'https://context7.com/'] },
+];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const SWATCH = ['#FF6B6B', '#FF9F1C', '#2EC4B6', '#3A86FF', '#06D6A0', '#F15BB5', '#8D6E63', '#118AB2', '#8338EC', '#E0524F'];
 const SKINS = ['#F7D7B5', '#F3C7A2', '#F0C8A0', '#EDB98A', '#E3AE7C', '#C98E5E', '#A8724A', '#7A4E2E'];
@@ -370,8 +383,10 @@ function renderStaff(fromStatus) {
   $$('#staffSeg button').forEach((b) => { b.onclick = () => { S.staffSeg = b.dataset.seg; renderStaff(); }; });
   $('#addStaff').disabled = S.staff.length >= 8;
   $('#addStaff').title = S.staff.length >= 8 ? 'At most 8 staff. Archive one first.' : '';
-  const inv = S.office.addons && S.office.addons['invois-online'];
-  const invChip = (id) => (inv && inv.enabled && (inv.staff || []).includes(id) ? '<span class="ichip" title="Works with Invois Online"><img src="assets/invois-icon.png" alt="">Invois</span>' : '');
+  const invChip = (id) => ADDON_CARDS.map((c) => {
+    const a = S.office.addons && S.office.addons[c.id];
+    return a && a.enabled && (a.staff || []).includes(id) ? `<span class="ichip" title="Works with ${c.title}">${c.img ? `<img src="${c.img}" alt="">` : ''}${c.chip}</span>` : '';
+  }).join('');
 
   if (S.staffSeg === 'active') {
     const LAB = { working: 'Working', sleeping: 'Sleeping', waiting: 'Waiting for OK' };
@@ -636,7 +651,16 @@ function renderSettings() {
     ['projects', false, 'Projects', 'Every project folder in projects/, with its files and notes.'],
     ['staffFiles', false, 'Staff work files', "Files staff made in their folders (quotes, drafts, price lists). Their job description and rules stay."],
   ];
-  const inv = (S.office.addons || {})['invois-online'];
+  const card = (c) => {
+    const a = (S.office.addons || {})[c.id];
+    return `<div class="featured"${c.img ? '' : ' style="margin-top:16px"'}><div class="fhead">${c.img ? `<img src="${c.img}" alt="">` : icon('plug')}<div><h2>${c.name}</h2><div class="muted">${c.about}</div></div></div>
+      <div class="fbody">${a && a.enabled ? `Turned on for: <b>${(a.staff || []).map((id) => esc(nameOf(id))).join(', ') || 'no staff yet'}</b>.${c.login ? `<br>Not logged in yet? Ask ${esc(pa().name)} in chat: <i>"${c.login}"</i>, and sign in in your browser.` : ''}
+        <h3 style="margin:18px 0 6px">Actions that leave your office</h3>
+        <p class="muted" style="line-height:1.6;margin-bottom:10px">Ask me first: the staff asks in Needs your OK, and does it right after you approve. Always allow: the staff does it without asking.</p>
+        <div class="actList muted" data-addon="${c.id}">Loading...</div>`
+      : `Not connected. ${c.off}`}</div>
+      <div class="ffoot"><a class="btn ${c.img ? 'inv' : ''}" href="${c.btn[1]}" target="_blank" rel="noopener">${c.btn[0]}</a></div></div>`;
+  };
   const body = {
     general: `<h3 style="margin-bottom:12px">General</h3><div class="kv">
       <span class="muted">Company</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input class="in" id="coName" aria-label="Company name" maxlength="80" value="${esc(S.office.company)}" style="max-width:320px"><button class="btn sm" id="coSave">Save</button></span>
@@ -646,13 +670,7 @@ function renderSettings() {
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
       <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span></div>
       <p class="muted" style="margin-top:16px;line-height:1.6">To change the manager's name, ask Claude in the office folder, for example <i>"rename the manager to Hana"</i>. Everything is plain files: OFFICE.md explains each one.</p>`,
-    addons: `<div class="featured"><div class="fhead"><img src="assets/invois-icon.png" alt=""><div><h2>invois.online</h2><div class="muted">Real quotations, invoices and payments for your sales and finance staff. Made by the team behind AI Office.</div></div></div>
-      <div class="fbody">${inv && inv.enabled ? `Turned on for: <b>${(inv.staff || []).map((id) => esc(nameOf(id))).join(', ') || 'no staff yet'}</b>.<br>Not logged in yet? Ask ${esc(pa().name)} in chat: <i>"log in to invois.online"</i>, and sign in in your browser.
-        <h3 style="margin:18px 0 6px">Actions that leave your office</h3>
-        <p class="muted" style="line-height:1.6;margin-bottom:10px">Ask me first: the staff asks in Needs your OK, and does it right after you approve. Always allow: the staff does it without asking.</p>
-        <div id="actList" class="muted">Loading...</div>`
-      : `Not connected. Free plan: 60 documents a month. To connect, ask Claude in the office folder: <i>"connect the invois.online MCP for my sales and finance staff"</i>.`}</div>
-      <div class="ffoot"><a class="btn inv" href="https://invois.online/?ref=ai-office" target="_blank" rel="noopener">Create free account</a></div></div>
+    addons: `${ADDON_CARDS.map(card).join('')}
       <p class="muted" style="margin-top:20px;line-height:1.6">More: email, WhatsApp, your shop, any API. Ask Claude in the office folder, for example <i>"connect my Gmail enquiries to the inbox"</i> or <i>"let Siti send WhatsApp messages"</i>.</p>`,
     api: `<h3 style="margin-bottom:8px">Office key and local API</h3>
       <p class="muted" style="line-height:1.6;margin-bottom:12px">Scripts and connectors you set up can add inbox items, ask for approvals and log activity while the dashboard runs. Every call needs the office key. It only works on this computer.</p>
@@ -695,13 +713,16 @@ function renderSettings() {
     api('linked').then(show).catch((e) => { $('#lkList').textContent = e.message; });
     $('#lkAdd').onclick = () => act(() => api('linked', 'POST', { path: $('#lkPath').value, label: $('#lkLabel').value }), 'Linked').then((list) => { $('#lkPath').value = ''; $('#lkLabel').value = ''; show(list); });
   }
-  if ($('#actList')) {
+  if ($('.actList')) {
     const showActs = (list) => {
-      $('#actList').innerHTML = `<table style="max-width:640px"><tbody>${list.map((x) => `<tr style="cursor:default"><td>${esc(x.label)}</td><td style="text-align:right">
-        <select class="in" data-act="${esc(x.tool)}" aria-label="${esc(x.label)}" style="width:auto"><option value="ask" ${x.always ? '' : 'selected'}>Ask me first</option><option value="always" ${x.always ? 'selected' : ''}>Always allow</option></select></td></tr>`).join('')}</tbody></table>`;
+      $$('.actList').forEach((box) => {
+        const mine = list.filter((x) => x.addon === box.dataset.addon);
+        box.innerHTML = mine.length ? `<table style="max-width:640px"><tbody>${mine.map((x) => `<tr style="cursor:default"><td>${esc(x.label)}</td><td style="text-align:right">
+        <select class="in" data-act="${esc(x.tool)}" aria-label="${esc(x.label)}" style="width:auto"><option value="ask" ${x.always ? '' : 'selected'}>Ask me first</option><option value="always" ${x.always ? 'selected' : ''}>Always allow</option></select></td></tr>`).join('')}</tbody></table>` : 'Nothing here needs your OK.';
+      });
       $$('[data-act]').forEach((sel) => { sel.onchange = () => act(() => api('actions', 'POST', { tool: sel.dataset.act, always: sel.value === 'always' }), sel.value === 'always' ? 'Set to Always allow' : 'Set to Ask me first').then(showActs); });
     };
-    api('actions').then(showActs).catch((e) => { $('#actList').textContent = e.message; });
+    api('actions').then(showActs).catch((e) => { $$('.actList').forEach((box) => { box.textContent = e.message; }); });
   }
   const cg = $('#clGo');
   if (cg) {

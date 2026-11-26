@@ -132,9 +132,25 @@ function decide(input, office, opts = {}) {
 
 // Add-on actions that leave the office. Each needs the boss's OK, unless he set it to "Always allow".
 // The same tools may come from the claude.ai connector (mcp__claude_ai_Invois_Online__...): same rule.
+// This file is copied into every office and runs alone, so the list is written out here, not read from lib/defaults.js
+// (test/guard.test.js checks both lists agree). Each add-on: its server names, and tool -> label.
+const ADDON_ASK = {
+  'invois-online': { servers: ['invois-online', 'claude_ai_Invois_Online'], tools: {
+    send_quotation_email: 'Email a quotation to the customer', send_invoice_email: 'Email an invoice to the customer', create_payment: 'Record a payment on an invoice' } },
+  // GitHub is read-only in v1 (/mcp/readonly), so these do not exist yet; they are gated for a later write mode.
+  github: { servers: ['github', 'claude_ai_GitHub'], tools: {
+    merge_pull_request: 'Merge a pull request', push_files: 'Push files to a repository', create_or_update_file: 'Create or change a file in a repository',
+    delete_file: 'Delete a file from a repository', delete_repository: 'Delete a repository', create_repository: 'Create a repository',
+    actions_run_trigger: 'Run or cancel a GitHub Actions workflow', pull_request_review_write: 'Review a pull request',
+    update_pull_request_branch: 'Update a pull request branch', create_pull_request: 'Open a pull request', update_pull_request: 'Change a pull request',
+    issue_write: 'Create or change an issue', add_issue_comment: 'Comment on an issue' } },
+  figma: { servers: ['figma', 'claude_ai_Figma'], tools: {
+    use_figma: 'Change a Figma file (can delete content)', send_code_to_figma: 'Send code to Figma', generate_figma_design: 'Create a design in Figma' } },
+  context7: { servers: ['context7', 'claude_ai_Context7'], tools: {} }, // read only: nothing to ask
+};
 const ASK_FIRST = {};
-for (const [t, label] of [['send_quotation_email', 'Email a quotation to the customer'], ['send_invoice_email', 'Email an invoice to the customer'], ['create_payment', 'Record a payment on an invoice']]) {
-  for (const server of ['invois-online', 'claude_ai_Invois_Online']) ASK_FIRST[`mcp__${server}__${t}`] = { addon: 'invois-online', label };
+for (const [addon, { servers, tools }] of Object.entries(ADDON_ASK)) {
+  for (const [t, label] of Object.entries(tools)) for (const server of servers) ASK_FIRST[`mcp__${server}__${t}`] = { addon, label };
 }
 
 // Same call? Same keys, same values (a number and its text count as the same).

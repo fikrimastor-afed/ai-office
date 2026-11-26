@@ -217,8 +217,12 @@ test('ask-first actions: only with an unused OK from the boss for that staff and
   assert.strictEqual(decideAction({ tool_name: 'mcp__invois-online__get_quotations', tool_input: {} }, office, []), null);
   const viaConnector = decideAction({ tool_name: 'mcp__claude_ai_Invois_Online__send_quotation_email', tool_input: inp, cwd: '/home/ali/office/staff/siti' }, { ...office, addons: { 'invois-online': { enabled: true } } }, [grant()], { chat: true, win: false });
   assert.strictEqual(viaConnector.decision, 'allow', 'same OK works through the claude.ai connector');
-  assert.deepStrictEqual([...new Set(Object.keys(ASK_FIRST).map((t) => t.split('__').pop()))].sort(),
-    require('../lib/defaults').INVOIS.roles.flatMap((r) => r.askFirst).sort(), 'guard and defaults agree');
+  // guard.js is a standalone copy of the ask-first list: it must agree with every add-on in defaults.js
+  for (const a of require('../lib/defaults').ADDONS) {
+    const names = Object.entries(ASK_FIRST).filter(([, r]) => r.addon === a.id).map(([t]) => t.split('__').pop());
+    assert.deepStrictEqual([...new Set(names)].sort(), [...new Set(a.roles.flatMap((r) => r.askFirst))].sort(), `guard and defaults agree: ${a.id}`);
+    for (const t of new Set(names)) for (const server of [a.id, ...a.aliases]) assert.ok(ASK_FIRST[`mcp__${server}__${t}`], `${server} ${t}`);
+  }
 });
 
 console.log(`\n${n} guard tests passed`);
