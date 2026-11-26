@@ -239,6 +239,54 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       });
       assert.ok(got.includes('approvals'));
     });
+
+    await test('rename company: office.json, generated files and archived copies', async () => {
+      const oldName = 'Kedai Ali';
+      const newName = 'Kedai $& Ali Sdn Bhd'; // $& must stay literal
+      const [active, archived] = JSON.parse(read('office.json')).staff.map((s) => s.id);
+      assert.strictEqual((await req('POST', `/api/staff/${archived}/archive`)).status, 200);
+      const res = await req('PUT', '/api/office', { company: newName });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.body.company, newName);
+      assert.strictEqual(JSON.parse(read('office.json')).company, newName);
+      const files = ['CLAUDE.md', `staff/${active}/CLAUDE.md`, `.claude/agents/${active}.md`, `.archive/staff/${archived}/CLAUDE.md`, `.archive/agents/${archived}.md`];
+      for (const f of files) {
+        assert.ok(read(f).includes(newName), `${f} has new name`);
+        assert.ok(!read(f).includes(oldName), `${f} has no old name`);
+      }
+      assert.ok((await req('PUT', '/api/office', { company: '   ' })).status >= 400, 'empty name rejected');
+      assert.strictEqual(JSON.parse(read('office.json')).company, newName, 'empty name changed nothing');
+    });
+
+    // pasted or dropped images: saved in attachments/ under a generated name, type checked by magic bytes
+    const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const MAX_IMG = 10 * 1024 * 1024;
+    await test('attachments: a PNG is saved under attachments/ with a generated name', async () => {
+      const r = await req('POST', '/api/attachments', { type: 'image/png', data: PNG_1PX });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.ok(path.isAbsolute(r.body.path), 'absolute path, readable from staff folders too');
+      assert.ok(r.body.path.startsWith(path.join(dir, 'attachments') + path.sep), r.body.path);
+      assert.match(path.basename(r.body.path), /^\d{8}-\d{6}-[0-9a-f]{4}\.png$/);
+      assert.ok(fs.readFileSync(r.body.path).equals(Buffer.from(PNG_1PX, 'base64')));
+    });
+
+    await test('attachments: non-image bytes sent as an image are refused', async () => {
+      const count = () => (fs.existsSync(path.join(dir, 'attachments')) ? fs.readdirSync(path.join(dir, 'attachments')).length : 0);
+      const before = count();
+      const r = await req('POST', '/api/attachments', { type: 'image/png', data: Buffer.from('hello').toString('base64') });
+      assert.strictEqual(r.status, 415, JSON.stringify(r.body));
+      assert.strictEqual(count(), before, 'nothing saved');
+    });
+
+    await test('attachments: a file over 10 MB is refused', async () => {
+      const big = Buffer.alloc(MAX_IMG + 1); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(big);
+      const r = await req('POST', '/api/attachments', { type: 'image/png', data: big.toString('base64') });
+      assert.strictEqual(r.status, 413, JSON.stringify(r.body));
+    });
+
+    await test('attachments: needs the office key', async () => {
+      assert.strictEqual((await req('POST', '/api/attachments', { type: 'image/png', data: PNG_1PX }, { 'x-office-key': '' })).status, 401);
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });

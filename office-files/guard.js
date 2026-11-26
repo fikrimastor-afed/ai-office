@@ -17,16 +17,33 @@ const PRESETS = {
       'git checkout -b', 'git stash', 'git fetch', 'git pull', 'git rm', 'git restore --staged', 'git rev-parse', 'git remote -v'],
   },
   laravel: { label: 'Laravel', about: 'php artisan (make, migrate, test, route:list, cache, ...)', allow: ['php artisan', 'php -v', 'php -l'] },
-  node: { label: 'npm', about: 'npm install, npm ci, npm run, npm test', allow: ['npm install', 'npm i ', 'npm ci', 'npm run', 'npm test', 'npm ls', 'npm outdated'] },
+  node: { label: 'npm', about: 'npm install, npm ci, npm run, npm test', allow: ['npm install', 'npm i ', 'npm ci', 'npm run', 'npm test', 'npm ls', 'npm outdated', 'NODE_OPTIONS=--max-old-space-size=8192 npm run build'] },
   composer: { label: 'Composer', about: 'composer install, require, update, dump-autoload', allow: ['composer install', 'composer require', 'composer update', 'composer dump-autoload', 'composer show', 'composer outdated', 'composer validate'] },
   docs: { label: 'Office documents', about: 'PowerPoint, Excel, Word, PDF and images (node runs a script saved in the office)', allow: ['node'] },
+  go: { label: 'Go', about: 'go build, test, vet, mod download, cover, gofmt -l, golangci-lint', allow: ['go build', 'go test', 'go vet', 'go mod download', 'go tool cover', 'gofmt -l', 'golangci-lint run'] },
+  python: { label: 'Python', about: 'pytest, compileall, ruff check, mypy, make lint/test', allow: ['pytest', 'python -m pytest', 'python3 -m pytest', 'python -m compileall', 'python3 -m compileall', 'ruff check', 'mypy', 'make lint', 'make test', '.venv/bin/pytest', '.venv/bin/python -m pytest', '.venv/bin/ruff check', '.venv/bin/mypy'] },
+  docker_read: { label: 'Docker (read-only)', about: 'docker compose ps, logs', allow: ['docker compose ps', 'docker compose logs'] },
+  git_read: { label: 'Git (read-only)', about: 'status, diff, log, show', allow: ['git status', 'git diff', 'git log', 'git show', 'git rev-parse', 'git remote -v', 'git branch --show-current'] },
 };
 // A staff's presets: "docs" is on unless the boss turned it off (docs: false in office.json).
 const cmdsOf = (s) => [...(s && s.docs === false ? [] : ['docs']), ...((s && s.commands) || []).filter((k) => k !== 'docs')];
+// Which staff runs this call ('' = the PA). The office sets AI_OFFICE_STAFF on each run it starts ("pa" for the manager),
+// so it holds after a cd into a linked folder. Then a known agent_type, then the staff folder of cwd.
+function staffIdOf(input, office, env, P) {
+  const ids = (office.staff || []).map((s) => s.id);
+  const pinned = (env || {}).AI_OFFICE_STAFF;
+  if (pinned === 'pa') return '';
+  if (ids.includes(pinned)) return pinned;
+  if (ids.includes(input.agent_type)) return input.agent_type;
+  const rel = P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/);
+  return rel[0] === 'staff' ? rel[1] : '';
+}
 // Never, whatever is ticked: these lose work, publish, or open a door. The boss runs them.
 const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 'git filter-branch', 'git branch -D', 'git checkout --', 'git restore .',
   'php artisan migrate:fresh', 'php artisan migrate:reset', 'php artisan migrate:refresh', 'php artisan db:wipe', 'php artisan tinker', 'php artisan down',
-  'npm publish', 'composer remove', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
+  'npm publish', 'composer remove', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp',
+  'az', 'kubectl', 'docker push', 'docker login', 'docker buildx', 'docker compose down -v', 'docker volume', 'docker system prune', 'docker compose config',
+  'go install', 'python -c', 'python3 -c', '.venv/bin/python -c', 'psql', 'alembic downgrade'];
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
 
@@ -65,7 +82,7 @@ function decide(input, office, opts = {}) {
   const win = opts.win ?? process.platform === 'win32';
   const P = win ? path.win32 : path.posix;
   const cmd = String((input.tool_input || {}).command || '').trim();
-  const staffId = input.agent_type || ((P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff') ? P.relative(office.dir, input.cwd).split(/[\\/]/)[1] : '');
+  const staffId = staffIdOf(input, office, opts.env ?? process.env, P);
   const staff = (office.staff || []).find((s) => s.id === staffId);
   const name = staff ? staff.name : 'The PA';
   const no = (reason) => ({ decision: opts.chat ? 'deny' : null, reason });
@@ -137,9 +154,8 @@ function decideAction(input, office, grants, opts = {}) {
   const addon = (office.addons || {})[rule.addon] || {};
   if ((addon.always || []).includes(short)) return { decision: 'allow', reason: `The boss set "${rule.label}" to Always allow.` };
   const P = (opts.win ?? process.platform === 'win32') ? path.win32 : path.posix;
-  const rel = P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/);
-  const staffId = input.agent_type || (rel[0] === 'staff' ? rel[1] : '');
-  const g = staffId && (grants || []).find((x) => !x.used && x.from === staffId && x.tool === short && sameInput(x.input, input.tool_input || {}));
+  const staffId = staffIdOf(input, office, opts.env ?? process.env, P);
+  const g =staffId && (grants || []).find((x) => !x.used && x.from === staffId && x.tool === short && sameInput(x.input, input.tool_input || {}));
   if (g) return { decision: 'allow', reason: `The boss approved this (${g.action || short}).`, grant: g.id };
   const how = `Write an approval file in approvals/ with "tool: ${short}" and "input: <the exact JSON you will call it with, on one line>", then stop. When the boss approves, the office runs it for you.`;
   return opts.chat ? { decision: 'deny', reason: `"${rule.label}" needs the boss's OK first. ${how}` } : { decision: null, reason: how };

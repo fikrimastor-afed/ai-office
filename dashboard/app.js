@@ -498,7 +498,7 @@ function newProjectModal() {
 }
 
 // ------------------------------------------------------------------ inbox
-const TYPE_COL = { lead: '#7C3AED', order: '#0F766E', enquiry: '#2563EB', message: '#6B7082' };
+const TYPE_COL = { lead: 'var(--acc)', order: 'var(--teal)', enquiry: 'var(--blue)', message: 'var(--muted)' };
 function renderInbox() {
   const v = $('#v-inbox');
   if (!$('.split', v)) {
@@ -572,11 +572,11 @@ function renderSettings() {
   const inv = (S.office.addons || {})['invois-online'];
   const body = {
     general: `<h3 style="margin-bottom:12px">General</h3><div class="kv">
-      <span class="muted">Company</span><span>${esc(S.office.company)}</span>
+      <span class="muted">Company</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input class="in" id="coName" maxlength="80" value="${esc(S.office.company)}" style="max-width:320px"><button class="btn sm" id="coSave">Save</button></span>
       <span class="muted">Manager</span><span>${esc(pa().name)}</span>
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
       <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span></div>
-      <p class="muted" style="margin-top:16px;line-height:1.6">To change the company or manager's name, ask Claude in the office folder, for example <i>"rename the company to Kedai Ali Sdn Bhd"</i>. Everything is plain files: OFFICE.md explains each one.</p>`,
+      <p class="muted" style="margin-top:16px;line-height:1.6">To change the manager's name, ask Claude in the office folder, for example <i>"rename the manager to Hana"</i>. Everything is plain files: OFFICE.md explains each one.</p>`,
     addons: `<div class="featured"><div class="fhead"><img src="assets/invois-icon.png" alt=""><div><h2>invois.online</h2><div class="muted">Real quotations, invoices and payments for your sales and finance staff. Made by the team behind AI Office.</div></div></div>
       <div class="fbody">${inv && inv.enabled ? `Turned on for: <b>${(inv.staff || []).map((id) => esc(nameOf(id))).join(', ') || 'no staff yet'}</b>.<br>Not logged in yet? Ask ${esc(pa().name)} in chat: <i>"log in to invois.online"</i>, and sign in in your browser.
         <h3 style="margin:18px 0 6px">Actions that leave your office</h3>
@@ -612,6 +612,8 @@ function renderSettings() {
   wireSplits($('#v-settings'));
   $$('[data-s]').forEach((b) => { b.onclick = () => { S.settings = b.dataset.s; renderSettings(); }; });
   const ks = $('#keyShow'); if (ks) ks.onclick = () => { $('#keyV').textContent = KEY; ks.remove(); };
+  const co = $('#coSave');
+  if (co) co.onclick = () => act(() => api('office', 'PUT', { company: $('#coName').value }), 'Company saved').then(() => refresh(['office']));
   if (S.settings === 'linked') {
     const show = (list) => {
       $('#lkList').innerHTML = list.length ? `<table style="max-width:820px"><thead><tr><th>Name</th><th>Folder</th><th></th></tr></thead><tbody>${list.map((l) => `<tr style="cursor:default"><td>${esc(l.project ? `Project: ${l.label}` : l.label)}</td><td class="mono" style="max-width:460px">${esc(l.path)}${l.ok ? '' : ' <span class="badge waiting">not found</span>'}</td>
@@ -668,6 +670,39 @@ async function sendChat(id, text) {
   try { const r = await api(`chat/${id}`, 'POST', { text: t }); chatOf(id).running = true; if (r.queued) toast(`${personOf(id).name} will read it right after this reply`); renderChats(); return true; } catch (e) { toast(e.message, true); return false; }
 }
 
+// Pasted or dropped images: each one is saved in the office, and its path goes into the message as a line.
+const IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const IMG_MAX = 10 * 1024 * 1024;
+const toBase64 = (f) => new Promise((ok, no) => {
+  const r = new FileReader();
+  r.onload = () => ok(String(r.result).split(',')[1]);
+  r.onerror = () => no(r.error);
+  r.readAsDataURL(f);
+});
+function insertAtCursor(ta, text) {
+  const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? s;
+  const pre = ta.value.slice(0, s), post = ta.value.slice(e);
+  const at = pre + (pre && !pre.endsWith('\n') ? '\n' : '') + text + '\n';
+  ta.value = at + post;
+  ta.setSelectionRange(at.length, at.length);
+  ta.dispatchEvent(new Event('input'));
+}
+async function attachImages(ta, files) {
+  const imgs = [...files].filter((f) => IMG_TYPES.includes(f.type));
+  if (!imgs.length) { toast('Only PNG, JPEG, GIF or WebP images can be added', true); return; }
+  const box = ta.closest('.box');
+  box.classList.add('up');
+  try {
+    for (const f of imgs) {
+      if (f.size > IMG_MAX) { toast(`${f.name || 'That image'} is bigger than 10 MB`, true); continue; }
+      try {
+        const r = await api('attachments', 'POST', { type: f.type, data: await toBase64(f) });
+        insertAtCursor(ta, `[image: ${r.path}]`);
+      } catch (e) { toast(e.message, true); }
+    }
+  } finally { box.classList.remove('up'); ta.focus(); }
+}
+
 function msgHtml(id, m) {
   const time = m.at ? new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   if (m.from === 'boss') return `<div class="bm me">${esc(m.text)}<span class="t">${time}</span></div>`;
@@ -714,7 +749,7 @@ function renderChats() {
   if (!wins) { wins = document.createElement('div'); wins.id = 'wins'; document.body.append(wins); }
   const people = [personOf('pa'), ...S.staff];
   V.open = V.open.filter((id) => personOf(id));
-  const maxWin = Math.max(1, Math.floor((innerWidth - 90 - (S.okOpen ? 380 : 0)) / 340));
+  const maxWin = Math.max(1, Math.floor((innerWidth - 90 - (S.okOpen ? 380 : 0)) / 430));
   const shown = V.open.slice(0, maxWin);
 
   dock.innerHTML = people.map((p) => {
@@ -736,6 +771,19 @@ function renderChats() {
       ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } };
       ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(120, ta.scrollHeight)}px`; };
       $('.send', w).onclick = send;
+      ta.onpaste = (e) => {
+        const files = [...(e.clipboardData ? e.clipboardData.items : [])].filter((i) => i.kind === 'file' && IMG_TYPES.includes(i.type)).map((i) => i.getAsFile());
+        if (!files.length) return; // text paste stays as it is
+        e.preventDefault(); attachImages(ta, files);
+      };
+      const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+      w.ondragover = (e) => { if (!hasFiles(e)) return; e.preventDefault(); w.classList.add('drop'); };
+      w.ondragleave = (e) => { if (!w.contains(e.relatedTarget)) w.classList.remove('drop'); };
+      w.ondrop = (e) => {
+        if (!hasFiles(e)) return; // text dropped into the box works as usual
+        e.preventDefault(); w.classList.remove('drop');
+        attachImages(ta, e.dataTransfer.files);
+      };
     }
     if (wins.children[i] !== w) wins.insertBefore(w, wins.children[i] || null);
     const p = personOf(id), c = chatOf(id);
@@ -947,3 +995,25 @@ function live() {
   renderChats();
   live();
 })();
+
+// light/dark: follows macOS until the user picks one; the pick is remembered (try/catch: private windows)
+const THEME_KEY = 'ai-office-theme';
+const sysDark = matchMedia('(prefers-color-scheme: dark)');
+const savedTheme = () => { try { const v = localStorage.getItem(THEME_KEY); return v === 'light' || v === 'dark' ? v : null; } catch { return null; } };
+const shownTheme = () => document.documentElement.dataset.theme || (sysDark.matches ? 'dark' : 'light');
+function renderTheme() {
+  const next = shownTheme() === 'dark' ? 'light' : 'dark';
+  const b = $('#theme');
+  b.innerHTML = next === 'light'
+    ? '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>'
+    : '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>';
+  b.setAttribute('aria-label', `Switch to ${next} mode`); b.title = `Switch to ${next} mode`;
+}
+$('#theme').onclick = () => {
+  const next = shownTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch { /* not saved, fine */ }
+  renderTheme();
+};
+sysDark.addEventListener('change', () => { if (!savedTheme()) renderTheme(); });
+renderTheme();

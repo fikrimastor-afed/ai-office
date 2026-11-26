@@ -2,6 +2,7 @@
 const assert = require('assert');
 const { decide, decideAction, ASK_FIRST, PRESETS } = require('../office-files/guard');
 
+delete process.env.AI_OFFICE_STAFF; // a run the office starts sets it; the tests pass their own env
 const office = {
   dir: '/home/ali/office',
   linked: ['/home/ali/projects/8fix'],
@@ -9,9 +10,11 @@ const office = {
     { id: 'shah', name: 'Shah', commands: ['git', 'laravel'], customCommands: ['php vendor/bin/pint'] },
     { id: 'siti', name: 'Siti' },
     { id: 'aina', name: 'Aina', docs: false },
+    { id: 'ravi', name: 'Ravi', commands: ['go', 'python', 'docker_read', 'git_read', 'node'] },
+    { id: 'kim', name: 'Kim', commands: ['python', 'docker_read'], customCommands: ['az', 'azure-foo', 'python -c', 'psql', 'docker compose down -v'] },
   ],
 };
-const run = (command, o = {}) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: o.agent ?? 'shah', cwd: o.cwd || office.dir }, office, { chat: o.chat ?? true, win: false });
+const run = (command, o = {}) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: o.agent ?? 'shah', cwd: o.cwd || office.dir }, office, { chat: o.chat ?? true, win: false, env: o.env || {} });
 const allow = (c, o) => assert.strictEqual(run(c, o).decision, 'allow', `should allow: ${c} (${run(c, o).reason})`);
 const deny = (c, o) => assert.strictEqual(run(c, o).decision, 'deny', `should deny: ${c}`);
 let n = 0;
@@ -88,6 +91,46 @@ test('a direct chat in a staff folder counts as that staff', () => {
   deny('git status', { agent: '', cwd: '/home/ali/office/staff/siti' });
 });
 
+test('hook agent_type that is not a staff id (e.g. the boss default "orchestrator"): staff found by folder', () => {
+  allow('git status', { agent: 'orchestrator', cwd: '/home/ali/office/staff/shah' });
+  deny('git status', { agent: 'orchestrator', cwd: '/home/ali/office/staff/siti' });
+  deny('git push', { agent: 'orchestrator', cwd: '/home/ali/office/staff/shah' }); // ALWAYS_DENY still wins
+  deny('git status', { agent: 'orchestrator', cwd: office.dir });
+  assert.match(run('git status', { agent: 'orchestrator', cwd: office.dir }).reason, /does not run commands/);
+  deny('git status', { agent: 'unknown', cwd: '/home/ali/office/staff/siti' });
+  allow('git status', { agent: 'unknown', cwd: '/home/ali/office/staff/shah' });
+});
+
+test('hook agent_type that is a staff id: that staff rules apply, whatever the cwd', () => {
+  allow('git status', { agent: 'shah', cwd: office.dir });
+  deny('git status', { agent: 'siti', cwd: office.dir });
+});
+
+test('AI_OFFICE_STAFF from the office: staff identity survives a cd into a linked folder', () => {
+  const linked = '/home/ali/projects/8fix';
+  const pinned = { agent: 'orchestrator', cwd: linked, env: { AI_OFFICE_STAFF: 'shah' } };
+  deny('cd /home/ali/projects/8fix && git status', { agent: 'orchestrator', cwd: linked }); // no env: PA, no commands
+  allow('cd /home/ali/projects/8fix && git status', pinned);
+  deny('cd /home/ali/projects/8fix && git push', pinned); // ALWAYS_DENY still wins
+  assert.match(run('cd /home/ali/projects/8fix && git push', pinned).reason, /never run from the dashboard/);
+  deny('git status', { agent: 'orchestrator', cwd: office.dir, env: { AI_OFFICE_STAFF: 'siti' } }); // siti has no commands
+  allow('git status', { agent: 'siti', cwd: office.dir, env: { AI_OFFICE_STAFF: 'shah' } }); // env beats agent_type
+  allow('git status', { agent: 'shah', cwd: office.dir, env: { AI_OFFICE_STAFF: 'nobody' } }); // unknown env: ignored, agent_type wins
+  deny('git status', { agent: 'orchestrator', cwd: office.dir, env: { AI_OFFICE_STAFF: 'pa' } });
+  assert.match(run('git status', { agent: 'shah', cwd: '/home/ali/office/staff/shah', env: { AI_OFFICE_STAFF: 'pa' } }).reason, /does not run commands/);
+});
+
+test('AI_OFFICE_STAFF in decideAction: the staff OK matches the staff the office started', () => {
+  const inp = { company_id: 1, quotation_id: 'QA000123' };
+  const cfg = { ...office, addons: { 'invois-online': { enabled: true, always: [] } } };
+  const r = decideAction({ tool_name: 'mcp__invois-online__send_quotation_email', tool_input: inp, agent_type: 'orchestrator', cwd: '/home/ali/projects/8fix' },
+    cfg, [{ id: 'a2', from: 'siti', tool: 'send_quotation_email', input: inp }], { chat: true, win: false, env: { AI_OFFICE_STAFF: 'siti' } });
+  assert.strictEqual(r.decision, 'allow'); assert.strictEqual(r.grant, 'a2');
+  const other = decideAction({ tool_name: 'mcp__invois-online__send_quotation_email', tool_input: inp, agent_type: 'orchestrator', cwd: '/home/ali/projects/8fix' },
+    cfg, [{ id: 'a2', from: 'siti', tool: 'send_quotation_email', input: inp }], { chat: true, win: false, env: { AI_OFFICE_STAFF: 'shah' } });
+  assert.strictEqual(other.decision, 'deny', 'shah cannot use siti OK');
+});
+
 test('terminal: no opinion on what is not allowed, so Claude Code asks the boss', () => {
   assert.strictEqual(run('npm install', { chat: false }).decision, null);
   assert.strictEqual(run('git push', { chat: false }).decision, null);
@@ -104,7 +147,54 @@ test('Windows paths (Git Bash /c/..., backslashes, quotes, WSL share)', () => {
 });
 
 test('presets are what the Staff page offers', () => {
-  assert.deepStrictEqual(Object.keys(PRESETS), ['git', 'laravel', 'node', 'composer', 'docs']);
+  assert.deepStrictEqual(Object.keys(PRESETS), ['git', 'laravel', 'node', 'composer', 'docs', 'go', 'python', 'docker_read', 'git_read']);
+});
+
+test('new presets: go, python, docker read-only, git read-only allow their commands only', () => {
+  const r = { agent: 'ravi' };
+  for (const c of ['go build ./...', 'go test ./... -race', 'go vet ./...', 'go mod download', 'go tool cover -html=c.out', 'gofmt -l .', 'golangci-lint run ./...']) allow(c, r);
+  for (const c of ['go run main.go', 'go mod tidy', 'go generate ./...']) deny(c, r);
+  for (const c of ['python -m pytest tests -q && ruff check src', 'python3 -m compileall app', '.venv/bin/pytest -x', '.venv/bin/python -m pytest',
+    '.venv/bin/ruff check src', '.venv/bin/mypy src', 'make test', 'make lint', 'mypy src', 'pytest']) allow(c, r);
+  for (const c of ['python script.py', 'python -c "import os"', 'python3 -c "x"', '.venv/bin/python -c "x"', 'pip install x', 'python -m http.server']) deny(c, r);
+  for (const c of ['docker compose ps', 'docker compose logs -f api']) allow(c, r);
+  for (const c of ['docker compose up -d', 'docker run alpine', 'docker compose down -v', 'docker push img', 'docker login', 'docker buildx build .',
+    'docker volume rm x', 'docker system prune', 'docker compose config']) deny(c, r);
+  for (const c of ['git status', 'git diff --stat', 'git log -5', 'git show HEAD', 'git remote -v', 'git rev-parse HEAD']) allow(c, r);
+  for (const c of ['git add .', 'git checkout -b x', 'git commit -m "x"']) deny(c, r);
+});
+
+test('git_read: "git branch --show-current" only, no other branch commands', () => {
+  const r = { agent: 'ravi' };
+  allow('git branch --show-current', r);
+  deny('git branch -D x', r); // ALWAYS_DENY
+  deny('git branch newname', r);
+});
+
+test('always-blocked: new deny entries refuse even when a preset or custom command would allow', () => {
+  // kim has these as custom commands (az, python -c, psql, docker compose down -v): the deny must still win
+  for (const c of ['az login', 'python -c "x"', 'psql -c "select 1"', 'docker compose down -v']) deny(c, { agent: 'kim' });
+  assert.match(run('az login', { agent: 'kim' }).reason, /never run from the dashboard/);
+  for (const c of ['az account show', 'kubectl get pods', 'docker push img', 'docker login', 'docker buildx build .', 'docker volume rm x',
+    'docker system prune -a', 'go install ./cmd/x', 'alembic downgrade -1']) deny(c, { agent: 'ravi' });
+  allow('azure-foo --help', { agent: 'kim' }); // "az" is a word boundary, not a substring
+  allow('python -m pytest tests -q', { agent: 'kim' });
+});
+
+test('NODE_OPTIONS: only the exact heap-size build line passes', () => {
+  const r = { agent: 'ravi' };
+  allow('NODE_OPTIONS=--max-old-space-size=8192 npm run build', r);
+  deny('FOO=1 npm run build', r);
+  deny('NODE_OPTIONS=--inspect npm run build', r);
+  deny('NODE_OPTIONS=--max-old-space-size=8192 node make.cjs', r);
+  deny('NODE_OPTIONS=--max-old-space-size=8192 rm -rf x', r);
+});
+
+test('ask-first: agent_type "orchestrator" in a staff folder matches that staff OK', () => {
+  const inp = { company_id: 1, quotation_id: 'QA000123' };
+  const cfg = { ...office, addons: { 'invois-online': { enabled: true, always: [] } } };
+  const r = decideAction({ tool_name: 'mcp__invois-online__send_quotation_email', tool_input: inp, agent_type: 'orchestrator', cwd: '/home/ali/office/staff/siti' }, cfg, [{ id: 'a1', from: 'siti', tool: 'send_quotation_email', input: inp }], { chat: true, win: false });
+  assert.strictEqual(r.decision, 'allow'); assert.strictEqual(r.grant, 'a1');
 });
 
 test('ask-first actions: only with an unused OK from the boss for that staff and that exact call', () => {

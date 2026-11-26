@@ -77,7 +77,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(c.args[c.args.indexOf('--permission-mode') + 1], 'default');
     const allowed = c.args[c.args.indexOf('--allowedTools') + 1].split(',');
     assert.ok(!allowed.includes('Read') && !allowed.includes('Write') && !allowed.includes('Edit'), 'file tools never allowed everywhere');
-    assert.deepStrictEqual(allowed, require('../lib/templates').officeRules(dir));
+    assert.deepStrictEqual(allowed, [...require('../lib/templates').officeRules(dir), ...require('../lib/templates').TOKLESS_TOOLS]); // PA is tokless
     assert.match(c.args[c.args.indexOf('--append-system-prompt') + 1], /create one task file/);
     assert.match(c.args[c.args.indexOf('--append-system-prompt') + 1], /only inside the office folder/);
     assert.ok(!c.args.includes('--resume'));
