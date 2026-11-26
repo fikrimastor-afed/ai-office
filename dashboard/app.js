@@ -375,7 +375,7 @@ function renderStaff(fromStatus) {
       return `<td><span class="badge ${x.status}"><i class="d ${x.status}"></i>${LAB[x.status]}</span></td><td class="muted" style="max-width:260px">${esc(x.status === 'working' ? taskText(id, x.task) : '') || '-'}</td><td class="muted">${x.last ? when(x.last) : '-'}</td>`; };
     redraw($('#staffList'), `<table class="stafftbl"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Now doing</th><th>Last active</th></tr></thead><tbody>
       <tr data-who="pa" tabindex="0" class="${S.sel.staff === 'pa' ? 'sel' : ''}"><td><span class="who">${paAv()}${esc(pa().name)} ${MGR}</span></td><td>Manager</td>${stCells('pa')}</tr>
-      ${S.staff.map((s) => `<tr data-who="${esc(s.id)}" tabindex="0" class="${S.sel.staff === s.id ? 'sel' : ''}" title="${esc(s.job)}"><td><span class="who">${av(s)}${esc(s.name)}</span></td><td><span style="display:inline-flex;align-items:center;gap:6px"><i class="d" style="border-radius:2px;background:${esc(s.colour)}"></i>${esc(s.role)}</span>${invChip(s.id)}</td>${stCells(s.id)}</tr>`).join('')}
+      ${S.staff.map((s) => `<tr data-who="${esc(s.id)}" tabindex="0" class="${S.sel.staff === s.id ? 'sel' : ''}" title="${esc(s.job)}"><td><span class="who">${av(s)}${esc(s.name)}</span></td><td><span style="display:inline-flex;align-items:center;gap:6px"><i class="d" style="border-radius:var(--rs);background:${esc(s.colour)}"></i>${esc(s.role)}</span>${invChip(s.id)}</td>${stCells(s.id)}</tr>`).join('')}
       </tbody></table>`);
     $$('#staffList tr[data-who]').forEach((tr) => { tr.onclick = () => { if (S.dirty.has('staff') && !confirm('Discard your unsaved changes?')) return; S.dirty.delete('staff'); S.sel.staff = tr.dataset.who; renderStaff(); }; });
   } else {
@@ -395,7 +395,7 @@ function runFields(who) {
   const opt = (list, v) => list.map(([k, l]) => `<option value="${esc(k)}" ${k === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
   return `<div class="grid2"><div><label class="lbl">Model</label><select class="in" name="model">${opt(r.models, cur.model)}</select></div>
     <div><label class="lbl">Effort</label><select class="in" name="effort">${opt(r.efforts, cur.effort)}</select></div></div>
-    <div class="faint" style="font-size:11.5px;margin-top:4px;line-height:1.5">A stronger model or more effort thinks harder and uses more of your Claude plan.</div>`;
+    <div class="faint" style="font-size:12px;margin-top:4px;line-height:1.5">A stronger model or more effort thinks harder and uses more of your Claude plan.</div>`;
 }
 // The office document tools install themselves on the first start; this says how that went.
 function docToolsLine() {
@@ -439,7 +439,7 @@ ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in t
         <div class="cmdgrid">${(S.presets || []).map((p) => `<label class="cmd"><input type="checkbox" name="cmd" value="${esc(p.id)}" ${(p.id === 'docs' ? s.docs !== false : (s.commands || []).includes(p.id)) ? 'checked' : ''}><span><b>${esc(p.label)}</b><br><span class="faint">${esc(p.about)}</span></span></label>`).join('')}</div>
         ${docToolsLine()}
         <textarea class="in mono" name="customCommands" rows="2" aria-label="Other commands, one per line" placeholder="Other commands, one per line, e.g. php vendor/bin/pint" style="margin-top:8px">${esc((s.customCommands || []).join('\n'))}</textarea>
-        <div class="faint" style="font-size:11.5px;margin-top:4px;line-height:1.5">Only in the office folder and linked folders. Never from the dashboard: git push, reset --hard, migrate:fresh, db:wipe, deleting with rm. You run those yourself.</div>
+        <div class="faint" style="font-size:12px;margin-top:4px;line-height:1.5">Only in the office folder and linked folders. Never from the dashboard: git push, reset --hard, migrate:fresh, db:wipe, deleting with rm. You run those yourself.</div>
         <label class="lbl">Tools</label><div class="pre" style="padding:0;color:var(--muted)">${esc(s.tools.replace(/<!--[\s\S]*?-->/g, '').replace(/^- Commands you may run.*$/m, '').trim())}</div>
         <div class="arcnote" style="margin:10px 0 0">${icon('plug')}<div>To give ${esc(s.name)} a new tool (email, WhatsApp, an API), ask Claude in the office folder, for example <i>"let ${esc(s.name)} send WhatsApp messages"</i>.</div></div>
         <label class="lbl">Saved to</label><div class="mono muted">${esc(s.file)}</div>
@@ -521,7 +521,7 @@ function renderProjects() {
         <div><label class="lbl">Deadline</label><input class="in" name="deadline" type="date" value="${esc(/^\d{4}-\d{2}-\d{2}$/.test(p.deadline) ? p.deadline : '')}"></div></div>
         <label class="lbl">Customer</label><input class="in" name="customer" value="${esc(p.customer)}">
         <label class="lbl">Linked folder (optional)</label><input class="in mono" name="linked" value="${esc(p.linked)}" placeholder="D:\\Kedai Ali\\website">
-        <div class="faint" style="font-size:11.5px;margin-top:4px;line-height:1.5">A folder outside the office where this project's files live. Staff may work there. Paste its full path (in File Explorer, click the address bar and copy).</div>
+        <div class="faint" style="font-size:12px;margin-top:4px;line-height:1.5">A folder outside the office where this project's files live. Staff may work there. Paste its full path (in File Explorer, click the address bar and copy).</div>
         <label class="lbl">Files</label>${p.files.length ? `<div class="mono muted" style="line-height:1.7">${p.files.map(esc).join('<br>')}</div>` : '<div class="muted">No files yet.</div>'}
         <label class="lbl">Folder</label><div class="mono muted">${esc(p.folder)}</div>
       </div>
@@ -656,7 +656,7 @@ function renderSettings() {
         <div><label class="lbl">Name</label><input class="in" id="lkLabel" placeholder="Company documents" maxlength="60"></div>
         <div><label class="lbl">Full folder path</label><input class="in mono" id="lkPath" placeholder="D:\\Kedai Ali\\documents"></div>
         <button class="btn pri" id="lkAdd" style="height:32px">${icon('plus')}Link</button></div>
-      <p class="faint" style="font-size:11.5px;margin-top:8px">Windows: in File Explorer, click the address bar and copy. Mac: right-click the folder while holding Option, then "Copy as Pathname". A project can also have its own linked folder (Projects, then the project).</p>`,
+      <p class="faint" style="font-size:12px;margin-top:8px">Windows: in File Explorer, click the address bar and copy. Mac: right-click the folder while holding Option, then "Copy as Pathname". A project can also have its own linked folder (Projects, then the project).</p>`,
     cleanup: `<h3 style="margin-bottom:6px">Clean up</h3>
       <p class="muted" style="line-height:1.6;margin-bottom:14px">Clear test or old data. Your team stays as it is: ${esc(pa().name)}'s instructions, every staff's job, rules and settings, and office.json are never touched.</p>
       <div style="display:flex;flex-direction:column;gap:10px;max-width:640px">${CLEAN.map(([k, on, l, d]) => `<label style="display:flex;gap:10px;align-items:flex-start;line-height:1.45"><input type="checkbox" name="cl" value="${k}" ${on ? 'checked' : ''} style="margin-top:3px"><span><b style="font-weight:600">${esc(l)}</b><br><span class="muted">${esc(d)}</span></span></label>`).join('')}</div>
@@ -850,7 +850,7 @@ function renderChats() {
     const p = personOf(id), c = chatOf(id);
     const st = c.running ? 'working' : ((S.status.people[id] || {}).status || 'sleeping');
     w.classList.toggle('min', V.min.includes(id));
-    redraw($('.wh', w), `${av(p)}<b>${esc(p.name)}</b>${id === 'pa' ? MGR : ''}<span class="badge ${st}" style="height:18px;font-size:11px"><i class="d ${st}"></i>${SLAB[st]}</span><div class="acts"><button class="ibtn" data-newchat="${esc(id)}" title="New conversation (${esc(p.name)} starts fresh; this chat stays above)" aria-label="New conversation with ${esc(p.name)}">${icon('refresh-cw')}</button><button class="ibtn" data-min="${esc(id)}" title="Minimise" aria-label="Minimise">${icon('minus')}</button><button class="ibtn" data-close="${esc(id)}" title="Close" aria-label="Close">${icon('x')}</button></div>`);
+    redraw($('.wh', w), `${av(p)}<b>${esc(p.name)}</b>${id === 'pa' ? MGR : ''}<span class="badge ${st}"><i class="d ${st}"></i>${SLAB[st]}</span><div class="acts"><button class="ibtn" data-newchat="${esc(id)}" title="New conversation (${esc(p.name)} starts fresh; this chat stays above)" aria-label="New conversation with ${esc(p.name)}">${icon('refresh-cw')}</button><button class="ibtn" data-min="${esc(id)}" title="Minimise" aria-label="Minimise">${icon('minus')}</button><button class="ibtn" data-close="${esc(id)}" title="Close" aria-label="Close">${icon('x')}</button></div>`);
     const waits = id === 'pa' ? [] : pendingOks().filter((a) => a.from === id);
     const work = id === 'pa' ? (S.tasks || []) : (S.tasks || []).filter((t) => t.staff === id || t.from === id); // their own work, and what they asked a colleague
     redraw($('.wstrips', w), workLine(work) + waits.map((a) => `<div class="wstrip">${icon('hand')}<div class="sq"><b>Waiting for your OK</b>${esc(a.action)}</div><button class="btn sm ok" data-ok="${esc(a.id)}" data-d="approved">Approve</button><button class="btn sm" data-ok="${esc(a.id)}" data-d="rejected">Reject</button></div>`).join(''));
