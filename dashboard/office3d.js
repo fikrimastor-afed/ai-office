@@ -10,9 +10,13 @@ const W = 14, D = 11.5;
 const BOSS = { colour: '#8338EC', skin: '#EBBE93', hair: '#3A2A22' };
 // desk slots in the team area: a grid of 3 per row, filled row by row. Row 1 starts below the boss
 // room's glass (the walking lane runs behind each row). The last row has 2: the meeting table is there.
-const COLS = [4.8, 7.9, 11.0], ROWS = [4.4, 6.95, 9.5];
-// slot = [x, y, turn]. turn is a quarter turn (0..3) of the whole desk about its slot point: 0 is the layout as drawn.
-const SLOTS = ROWS.flatMap((y) => COLS.map((x) => [x, y, 0])).slice(0, 8);
+// slot = [x, y, turn]: the desk's anchor and quarter turn (0..3, see TURN). Pinwheel: two 4-desk blocks, each around a plant hub,
+// turns alternate 0 / 3 so every seat faces the camera (turn 0: seat north of the desk, turn 3: seat west of it).
+// Block A (staff 1-4) is left of the PA; block B (staff 5-8) is right of it. Desk body centres: turn 0 = anchor + (0.7, 0.575), turn 3 = anchor + (0.575, -0.7).
+const SLOTS = [
+  [3.9, 4.325, 0], [3.9, 6.925, 0], [7.125, 5.6, 3], [7.125, 8.2, 3],   // block A: top-left, bottom-left, top-right, bottom-right
+  [12.0, 4.025, 0], [12.0, 6.625, 0], [9.725, 5.3, 3], [9.725, 7.9, 3], // block B: top-right, bottom-right, top-left, bottom-left
+];
 // quarter turns in floor coords, [a, b, c, d]: (dx, dy) -> (a*dx + b*dy, c*dx + d*dy). Turn 1 is (dx, dy) -> (-dy, dx).
 const TURN = [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0]];
 export function turnVec(q, dx, dy) { const [a, b, c, d] = TURN[q & 3]; return [a * dx + b * dy, c * dx + d * dy]; }
@@ -33,6 +37,90 @@ export function walkPoints(r, D) {
 export function routePoints(from, to, D) {
   const f = walkPoints(from, D), t = walkPoints(to, D);
   const pts = [f.side, f.spot, ...f.lane, ...[...t.lane].reverse(), ...t.approach, t.visit];
+  return pts.filter((q, i) => i === 0 || Math.hypot(q.x - pts[i - 1].x, q.z - pts[i - 1].z) > 0.05);
+}
+// ---- walking: grid path-finding round furniture (pure). Points are {x, z} floor coords; a solid is {x0, x1, y0, y1} (y0/y1 on the floor's z axis).
+export const WALK_CELL = 0.2, WALK_RADIUS = 0.2; // grid step; a person keeps this clearance (m) from every solid
+// true when (x, z) is at least r from every solid
+function clearAt(solids, x, z, r) {
+  for (const s of solids) {
+    const dx = Math.max(s.x0 - x, 0, x - s.x1), dz = Math.max(s.y0 - z, 0, z - s.y1);
+    if (dx * dx + dz * dz < r * r) return false;
+  }
+  return true;
+}
+export function walkGrid(solids, W, D) {
+  const cell = WALK_CELL, nx = Math.ceil(W / cell), nz = Math.ceil(D / cell);
+  const blocked = new Uint8Array(nx * nz);
+  for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) blocked[j * nx + i] = clearAt(solids, (i + 0.5) * cell, (j + 0.5) * cell, WALK_RADIUS) ? 0 : 1;
+  return { solids, nx, nz, cell, blocked };
+}
+// straight segment a-b keeps the clearance from every solid (sampled every 5 cm)
+function lineClear(g, a, b) {
+  const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.05));
+  for (let k = 0; k <= n; k++) if (!clearAt(g.solids, a.x + (b.x - a.x) * k / n, a.z + (b.z - a.z) * k / n, WALK_RADIUS)) return false;
+  return true;
+}
+// A* (8-way, no corner cutting, octile heuristic) from a to b, then string-pulled to the fewest straight segments.
+// Returns [a, ..., b] or null when no walkable path exists. Deterministic: ties keep the first cell found.
+export function findPath(g, a, b) {
+  const { nx, nz, cell, blocked } = g;
+  const cellOf = (p) => [Math.min(nx - 1, Math.max(0, Math.floor(p.x / cell))), Math.min(nz - 1, Math.max(0, Math.floor(p.z / cell)))];
+  // nearest walkable cell (rings up to 8 cells away) when an end point sits inside an inflated solid
+  const nearestFree = ([i0, j0]) => {
+    for (let r = 0; r <= 8; r++) for (let j = j0 - r; j <= j0 + r; j++) for (let i = i0 - r; i <= i0 + r; i++) {
+      if (i < 0 || j < 0 || i >= nx || j >= nz || Math.max(Math.abs(i - i0), Math.abs(j - j0)) !== r) continue;
+      if (!blocked[j * nx + i]) return j * nx + i;
+    }
+    return -1;
+  };
+  const s = nearestFree(cellOf(a)), t = nearestFree(cellOf(b));
+  if (s < 0 || t < 0) return null;
+  const centreOf = (k) => ({ x: ((k % nx) + 0.5) * cell, z: (Math.floor(k / nx) + 0.5) * cell });
+  const tx = t % nx, tz = Math.floor(t / nx);
+  const h = (k) => { const dx = Math.abs((k % nx) - tx), dz = Math.abs(Math.floor(k / nx) - tz); return Math.max(dx, dz) + (Math.SQRT2 - 1) * Math.min(dx, dz); };
+  const gs = new Float64Array(nx * nz).fill(Infinity), from = new Int32Array(nx * nz).fill(-1), done = new Uint8Array(nx * nz);
+  const open = [s]; gs[s] = 0;
+  while (open.length) {
+    let bi = 0;
+    for (let q = 1; q < open.length; q++) if (gs[open[q]] + h(open[q]) < gs[open[bi]] + h(open[bi])) bi = q;
+    const c = open[bi]; open[bi] = open[open.length - 1]; open.pop();
+    if (c === t) break;
+    done[c] = 1;
+    const ci = c % nx, cj = Math.floor(c / nx);
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const i = ci + di, j = cj + dj;
+      if ((!di && !dj) || i < 0 || j < 0 || i >= nx || j >= nz) continue;
+      const n = j * nx + i;
+      if (blocked[n] || done[n]) continue;
+      if (di && dj && (blocked[cj * nx + i] || blocked[j * nx + ci])) continue; // no corner cutting
+      const ng = gs[c] + (di && dj ? Math.SQRT2 : 1);
+      if (ng < gs[n]) { if (gs[n] === Infinity) open.push(n); gs[n] = ng; from[n] = c; }
+    }
+  }
+  if (gs[t] === Infinity) return null;
+  const cells = [];
+  for (let c = t; ; c = from[c]) { cells.push(c); if (c === s) break; }
+  // an end point inside a solid's clearance is replaced by its free cell centre (no segment may start or end inside a solid)
+  const ea = clearAt(g.solids, a.x, a.z, WALK_RADIUS) ? a : centreOf(s), eb = clearAt(g.solids, b.x, b.z, WALK_RADIUS) ? b : centreOf(t);
+  const pts = [ea, ...cells.reverse().map(centreOf), eb];
+  const out = [pts[0]];
+  for (let i = 0; i < pts.length - 1;) { // string pulling: jump to the furthest point with a clear straight line
+    let j = pts.length - 1;
+    while (j > i + 1 && !lineClear(g, pts[i], pts[j])) j--;
+    out.push(pts[j]); i = j;
+  }
+  return out;
+}
+// Staff trip from seat (or PA) `from` to `to` (a seat, or the booth). The room part is walked on the grid;
+// the booth part (lane and visit points) stays exactly as before. Returns null when no room path exists.
+export function tripRoute(g, from, to, D) {
+  const f = walkPoints(from, D), t = walkPoints(to, D);
+  const gate = { x: 6.3, z: D - 0.4 }, boothLane = { x: 6.3, z: D + 1.05 };
+  const fromB = from.kind === 'booth', toB = to.kind === 'booth';
+  const mid = findPath(g, fromB ? gate : f.side, toB ? gate : t.visit);
+  if (!mid) return null;
+  const pts = [...(fromB ? [f.side, f.spot, boothLane] : []), ...mid, ...(toB ? [boothLane, t.visit] : [])];
   return pts.filter((q, i) => i === 0 || Math.hypot(q.x - pts[i - 1].x, q.z - pts[i - 1].z) > 0.05);
 }
 const CS_ROLE = /customer|service|support|reception|front ?desk|help ?desk/i;
@@ -78,6 +166,8 @@ export async function buildOffice(opt = {}) {
   for (const n of ['office_building', 'crown']) emoji[n] = await loadImg(EMO(n));
 
   const scene = new THREE.Group();
+  const solids = []; // floor footprints of furniture and walls that stand in the walking zone (see walkGrid)
+  const solid = (x0, x1, y0, y1, z0, z1) => { if (z0 < 1.3 && z1 > 0.1) solids.push({ x0, x1, y0, y1 }); };
   const mats = new Map(), geos = new Map();
   // same shape, same geometry: people and furniture share their buffers (less GPU memory)
   const G = (Cls, ...a) => { const k = Cls.name + a.join(','); if (!geos.has(k)) geos.set(k, new Cls(...a)); return geos.get(k); };
@@ -91,15 +181,15 @@ export async function buildOffice(opt = {}) {
   const B = (x, y, z, w, d, h, c, r = 0.06, o = {}) => {
     const rr = Math.max(0.001, Math.min(r, w / 2 - 0.001, d / 2 - 0.001, h / 2 - 0.001));
     const m = new THREE.Mesh(G(RoundedBoxGeometry, w, h, d, 3, rr), typeof c === 'string' ? mat(c, o) : c);
-    m.position.set(x + w / 2, z + h / 2, y + d / 2); return add(m, o.cast !== false);
+    m.position.set(x + w / 2, z + h / 2, y + d / 2); solid(x, x + w, y, y + d, z, z + h); return add(m, o.cast !== false);
   };
   const CYL = (x, y, z, rt, rb, h, c, seg = 32, o = {}) => {
     const m = new THREE.Mesh(G(THREE.CylinderGeometry, rt, rb, h, seg), typeof c === 'string' ? mat(c, o) : c);
-    m.position.set(x, z + h / 2, y); return add(m, o.cast !== false);
+    m.position.set(x, z + h / 2, y); const r = Math.max(rt, rb); solid(x - r, x + r, y - r, y + r, z, z + h); return add(m, o.cast !== false);
   };
   const SPH = (x, y, z, r, c, o = {}) => {
     const m = new THREE.Mesh(G(THREE.SphereGeometry, r, o.seg || 24, o.seg ? Math.round(o.seg * 0.7) : 18), typeof c === 'string' ? mat(c, o) : c);
-    m.position.set(x, z, y); return add(m, o.cast !== false);
+    m.position.set(x, z, y); solid(x - r, x + r, y - r, y + r, z - r, z + r); return add(m, o.cast !== false);
   };
   const canvasTex = (w, h, draw) => {
     const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
@@ -452,25 +542,25 @@ export async function buildOffice(opt = {}) {
   CYL(12.3, 9.7, 0, 0.25, 0.4, 0.06, '#D9DDE8');
   CYL(12.3, 9.7, 0.06, 0.08, 0.08, 0.66, '#D9DDE8', 16);
   CYL(12.3, 9.7, 0.72, 1.0, 1.0, 0.08, '#FFF3DE');
-  B(11.95, 8.0, 0, 0.7, 0.62, 0.45, '#FF9F1C', 0.12);
+  B(11.95, 8.3, 0, 0.7, 0.62, 0.45, '#FF9F1C', 0.12);
   B(10.25, 9.4, 0, 0.62, 0.7, 0.45, '#3A86FF', 0.12);
   B(13.2, 10.65, 0, 0.62, 0.62, 0.45, '#FF6B6B', 0.12);
   B(11.9, 9.4, 0.8, 0.5, 0.36, 0.04, '#FFFFFF', 0.01);
   mug(12.7, 10.0, 0.8, '#2EC4B6');
-  plant(13.4, 3.4, 0.9); plant(13.4, 7.3, 1.0); plant(0.7, 10.25, 1.1);
+  plant(13.4, 3.4, 0.9); plant(13.45, 8.7, 1.0); plant(0.7, 10.25, 1.1); // (13.4, 7.3) moved: block B's bottom-right desk
   // printer
-  B(12.95, 5.4, 0, 0.8, 0.7, 0.65, '#E8EEF7', 0.05);
-  B(13.05, 5.5, 0.65, 0.6, 0.5, 0.14, '#C9D1E3', 0.04);
-  B(13.1, 5.7, 0.79, 0.45, 0.32, 0.02, '#FFFFFF', 0.005);
+  B(12.95, 2.3, 0, 0.8, 0.7, 0.65, '#E8EEF7', 0.05);
+  B(13.05, 2.4, 0.65, 0.6, 0.5, 0.14, '#C9D1E3', 0.04);
+  B(13.1, 2.6, 0.79, 0.45, 0.32, 0.02, '#FFFFFF', 0.005); // printer: moved from (5.4) to the north wall, where block B cannot close it in
 
   // ---------------- pairing corner (front-left floor, off the customer route) ----------------
   B(0.9, 7.8, 0, 0.22, 2.0, 0.85, '#8338EC', 0.06);                    // sofa back
   B(1.12, 7.8, 0, 0.9, 2.0, 0.4, '#8338EC', 0.06);                     // sofa base
   [7.82, 8.86].forEach((y) => B(1.14, y, 0.4, 0.86, 0.96, 0.12, '#A77BF2', 0.05, { cast: false })); // two seat cushions
   CYL(2.55, 8.7, 0, 0.32, 0.32, 0.36, '#FFF3DE', 32, { cast: false });  // low table
-  [[3.35, 7.9, '#2EC4B6'], [3.35, 9.5, '#FF9F1C']].forEach(([x, y, c]) => { // bean bags: squashed spheres
+  [[3.0, 7.9, '#2EC4B6'], [3.0, 9.5, '#FF9F1C']].forEach(([x, y, c]) => { // bean bags: squashed spheres (moved 0.35 m west, clear of cluster A)
     const bag = new THREE.Mesh(G(THREE.SphereGeometry, 0.42, 24, 16), mat(c)); bag.scale.y = 0.55;
-    bag.position.set(x, 0.23, y); add(bag, false);
+    bag.position.set(x, 0.23, y); add(bag, false); solid(x - 0.42, x + 0.42, y - 0.42, y + 0.42, -0.19, 0.65);
   });
   // design wall above the sofa, on the back-left wall (x = 0; the wall face is at X 0, the plane sits 2 cm out)
   const designTex = canvasTex(880, 320, (g, w, h) => {
@@ -480,6 +570,12 @@ export async function buildOffice(opt = {}) {
     ['#8338EC', '#FF6B6B', '#FFD166', '#2EC4B6', '#3A86FF'].forEach((c, i) => { g.fillStyle = c; g.fillRect(40 + i * 164, 225, 140, 64); });
   });
   planeX(10.4, 8.2, 1.6, 2.4, 0.02, texMat(designTex));
+
+  // ---------------- pairing station (freestanding, north strip): screen between the pair and the back wall, the pair faces the camera ----------------
+  B(5.85, 0.8, 0, 0.2, 0.2, 0.35, '#2E3248', 0.03);                  // screen stand
+  B(4.9, 0.85, 0.35, 2.2, 0.07, 0.9, '#1F2544', 0.03);               // screen: its back faces the camera
+  B(4.9, 1.6, 0, 2.2, 0.6, 0.72, '#FFF3DE', 0.04);                   // shared table
+  chair(5.6, 2.7, '#4A4F66'); chair(6.5, 2.7, '#4A4F66');            // the pair, seats turn 0 (faces the camera)
 
   // ---------------- customer service booth (outside the office) ----------------
   const CY = D + 1.35; // Aina's seat
@@ -505,8 +601,9 @@ export async function buildOffice(opt = {}) {
 
   // ---------------- team desks ----------------
   // the PA (manager) sits just outside the boss room, between the boss and the team
-  desk(1.9, 5.35, hex(pa.colour, '#8338EC'));
-  anchors.pa = staff(pa, 1.9 + 0.75, 5.35 - 0.42, st('pa'));
+  // PA desk: front centre, between the two blocks (turn 0)
+  desk(6.3, 9.625, hex(pa.colour, '#8338EC'));
+  anchors.pa = staff(pa, 6.3 + 0.75, 9.625 - 0.42, st('pa'));
   plan.desks.forEach((s, i) => {
     const [x, y, q = 0] = s.slot; desk(x, y, hex(s.colour, '#8D93A5'), q);
     const f = fr(x, y, q);
@@ -519,6 +616,9 @@ export async function buildOffice(opt = {}) {
     SPH(dx + ex, dy + ey, 1.09, 0.075, '#FFD93D', { cast: false, seg: 12 });
     fr(dx, dy, q).box(0.12, -0.025, 1.06, 0.07, 0.05, 0.035, '#FF9F1C', 0.012, { cast: false });
   });
+
+  // hub plants in the middle of each block (top about 1.1 m, below a seated head)
+  plant(6.0, 5.9, 0.7); plant(11.28, 3.2, 0.7); // block B's hub sits at the north end: its middle column stays open for walking
 
   // ---------------- customers queue outside ----------------
   // queue to the right of the counter, first in line at the counter end
@@ -538,7 +638,8 @@ export async function buildOffice(opt = {}) {
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02; sun.shadow.radius = 3;
   lights.push(sun);
   const fill = new THREE.DirectionalLight('#DDEBFF', 0.5); fill.position.set(W + 10, 8, -4); lights.push(fill);
-  return { root: scene, lights, baseCount, anchors: { ...anchors, ...anchorsCs, you: youA }, custA, CQ, W, D, lamp: lampMat, leds };
+  const walk = walkGrid(solids, W, D); // furniture footprints, once per scene build
+  return { root: scene, lights, baseCount, anchors: { ...anchors, ...anchorsCs, you: youA }, custA, CQ, W, D, lamp: lampMat, leds, walk };
 }
 
 // Renders the office into a container and keeps it alive: people type, look around,
@@ -599,6 +700,8 @@ export async function renderOffice(container, opt = {}) {
   for (const p of people) {
     const a = anchors[p.id]; if (!a) continue;
     const d = put('', toPx(a)); d.dataset.id = p.id; tags.set(p.id, d);
+    d.tabIndex = 0; d.setAttribute('role', 'button'); d.setAttribute('aria-label', p.name);
+    d.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.click(); } });
   }
   const bossTag = put(`<div class="pill boss"><img src="${EMO('crown')}">You (Boss)</div>`, toPx(youA));
   const tickets = custA.map((a, i) => { a.rig.tag = put('', toPx(a)); return put('', toPx(new THREE.Vector3(CQ[i][0], 1.0, CQ[i][1] + 0.25)), 'mid'); });
@@ -621,9 +724,20 @@ export async function renderOffice(container, opt = {}) {
   for (const p of people) { const a = anchors[p.id]; if (a) { a.rig.id = p.id; a.rig.tag = tags.get(p.id); a.rig.kind = a.rig.kind || (p.id === 'pa' ? 'pa' : 'desk'); rigs.set(p.id, a.rig); } }
   const all = [...rigs.values(), youA.rig, ...custA.map((a) => a.rig)];
   youA.rig.kind = 'boss'; custA.forEach((a, i) => { a.rig.kind = 'customer'; a.rig.wave = i === 2; });
-  // step-out, lane and visitor points: walkPoints / routePoints (module scope, pure)
+  // step-out and visitor points: walkPoints (module scope, pure). Staff trips walk round furniture on the grid; cached per pair.
   const side = (r) => walkPoints(r, D).side;
-  const route = (from, to) => routePoints(from, to, D);
+  const { walk } = built;
+  const trips = new Map(); let warnedNoPath = false;
+  const route = (from, to) => {
+    const key = [from.kind, from.home.x, from.home.z, from.home.turn, to.kind, to.home.x, to.home.z, to.home.turn].join();
+    if (!trips.has(key)) {
+      const inRoom = (r) => r.kind !== 'customer' && r.kind !== 'boss';
+      let p = inRoom(from) && inRoom(to) ? tripRoute(walk, from, to, D) : null;
+      if (!p && inRoom(from) && inRoom(to) && !warnedNoPath) { warnedNoPath = true; console.warn('office: no walking path between two seats, using straight lanes'); }
+      trips.set(key, p || routePoints(from, to, D));
+    }
+    return trips.get(key).slice();
+  };
   const back = (r, path) => path.slice(0, -1).reverse(); // ends at the side of their own chair
 
   // ---------------- poses ----------------
@@ -646,7 +760,8 @@ export async function renderOffice(container, opt = {}) {
     // badge after the name: Manager (dark, with a star) or the staff's role (in their colour)
     const badge = p.mgr ? `<span class="mgr"><img src="${EMO('star')}">Manager</span>`
       : p.role ? `<span class="mgr role" style="background:${badgeBg(col)}">${esc(p.role.length > 22 ? p.role.slice(0, 20) + '...' : p.role)}</span>` : '';
-    const html = `<div class="nm${p.mgr ? ' hasmgr' : badge ? ' hasrole' : ''}" style="color:${shadeHex(col, -0.18)};border-color:${col}">${esc(p.name)}${badge}</div><div class="pill ${S.cls}"><img src="${EMO(r.note ? 'laptop' : S.icon)}"><span class="mq"><span>${esc(txt.length > 90 ? txt.slice(0, 88) + '...' : txt)}</span></span></div>`;
+    // compact by default: name and a status dot. Role and status text open on hover, focus, or while this person's chat is open (CSS)
+    const html = `<div class="nm" style="color:${shadeHex(col, -0.18)};border-color:${p.mgr ? '#1B1D29' : col}">${esc(p.name)}<span class="dot ${S.cls}" aria-hidden="true"></span></div><div class="more">${badge}<div class="pill ${S.cls}"><img src="${EMO(r.note ? 'laptop' : S.icon)}"><span class="mq"><span>${esc(txt.length > 90 ? txt.slice(0, 88) + '...' : txt)}</span></span></div></div>`;
     if (html !== r.tagHtml) { d.innerHTML = html; r.tagHtml = html; d.title = txt; }
   }
   function setStatus(status) {
@@ -777,12 +892,41 @@ export async function renderOffice(container, opt = {}) {
     r.open.visible = !closed; r.shut.visible = closed;
   }
 
+  // Label collision: tags sit above their heads. Lowest first, a tag that overlaps one already placed steps up (at most NUDGE px).
+  // A tag that moved more than LEAD px gets a thin leader line down to its head.
+  const NUDGE = 40, LEAD = 12;
   function placeTags() {
+    const items = [];
     for (const r of all) {
       if (!r.tag) continue;
+      if (!r.lead) { r.lead = document.createElement('div'); r.lead.className = 'lead'; r.lead.style.display = 'none'; ov.appendChild(r.lead); }
+      r.lead.style.display = 'none';
+      if (r.tag.style.display === 'none') continue;
       r.head.getWorldPosition(wp); wp.y += 0.5;
       const [x, y] = toPx(wp);
-      r.tag.style.left = `${x.toFixed(1)}px`; r.tag.style.top = `${y.toFixed(1)}px`;
+      if (r.id) r.tag.classList.toggle('chat', !!document.querySelector(`.win[data-win="${r.id}"]`));
+      items.push({ r, x, y, w: r.tag.offsetWidth, h: r.tag.offsetHeight });
+    }
+    items.sort((a, b) => b.y - a.y);
+    const placed = [];
+    const clash = (a, p) => Math.min(a.x + a.w / 2, p.x + p.w / 2) - Math.max(a.x - a.w / 2, p.x - p.w / 2) > 0
+      && Math.min(a.top + a.h, p.top + p.h) - Math.max(a.top, p.top) > 0;
+    for (const it of items) {
+      const cur = { x: it.x, w: it.w, h: it.h, top: it.y - it.h };
+      for (let g = 0; g < 8; g++) {
+        const hit = placed.find((p) => clash(cur, p));
+        if (!hit) break;
+        const next = hit.top - it.h - 2;
+        if (it.y - it.h - next > NUDGE) break; // capped: stays near the head even if it overlaps
+        cur.top = next;
+      }
+      placed.push(cur);
+      const dy = cur.top - (it.y - it.h); // <= 0 when it moved up
+      it.r.tag.style.left = `${it.x.toFixed(1)}px`; it.r.tag.style.top = `${(it.y + dy).toFixed(1)}px`;
+      if (-dy > LEAD) {
+        it.r.lead.style.display = ''; it.r.lead.style.left = `${it.x.toFixed(1)}px`;
+        it.r.lead.style.top = `${(it.y + dy).toFixed(1)}px`; it.r.lead.style.height = `${(-dy).toFixed(1)}px`;
+      }
     }
   }
 

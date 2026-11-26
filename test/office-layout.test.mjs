@@ -27,9 +27,9 @@ const PA = { id: 'pa', name: 'Fiya', colour: '#8338EC', look: { scarf: true, ski
 const D = 11.5;
 // values captured from e32ccf8 (before the quarter-turn change)
 // Stage 1 scene (e32ccf8 + quarter turns) had 278d7f6c...; the booth plant moved off the booth route, so only that object differs
-const BASE_ROWS_SHA = 'b300156a9d2efdfd8cf93208d49b57062b804ad546a1eb158046caf44bf9f8b4';
-const BASE_ROUTES_SHA = '4d71e1662f344ed6d37ea723572d556925fd416da7594793c5f238f24d0e93d6';
-const BASE_SEATS = { pa: [2.65, 4.93], s1: [5.55, 3.9800000000000004], s2: [8.65, 3.9800000000000004], s3: [11.75, 3.9800000000000004], s4: [5.55, 6.53], s5: [8.65, 6.53], s6: [11.75, 6.53], s7: [5.55, 9.08], s0: [2.6, 12.85], you: [2.1, 0.92] };
+const BASE_ROWS_SHA = 'd1d8fd927623a427fe16aff3816912e5934cb1a875ef33de5d0152f651380e6e';
+const BASE_ROUTES_SHA = 'f42bc78f24a3db8324ed0ffdcf50f48a5ca1fc271a1f4f60691e756efba17d18';
+const BASE_SEATS = { pa: [7.05, 9.205], s1: [4.65, 3.9050000000000002], s2: [4.65, 6.505], s3: [6.705, 4.85], s4: [6.705, 7.449999999999999], s5: [12.75, 3.6050000000000004], s6: [12.75, 6.205], s7: [9.305, 4.55], s0: [2.6, 12.85], you: [2.1, 0.92] };
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 
 async function build(staff = STAFF) { return office.buildOffice({ staff, pa: PA, status: {}, queue: [], company: 'X' }); }
@@ -74,14 +74,14 @@ function checkRoute(points, boxes, step = 0.005) {
   return { crossings, minClear };
 }
 
-test('scene fingerprint matches the e32ccf8 baseline (618 meshes, same transforms and geometry)', async () => {
+test('scene fingerprint matches the pinwheel snapshot (643 meshes, same transforms and geometry)', async () => {
   const built = await build();
   const { rows, meshes } = rowsOf(built.root);
-  assert.equal(meshes, 618);
+  assert.equal(meshes, 643);
   assert.equal(sha(JSON.stringify(rows)), BASE_ROWS_SHA);
 });
 
-test('seat anchors at turn 0 equal the e32ccf8 positions', async () => {
+test('seat anchors equal the pinwheel seat table (plan: pinwheel-plan.md)', async () => {
   const built = await build();
   for (const [id, [x, z]] of Object.entries(BASE_SEATS)) {
     const a = built.anchors[id];
@@ -89,11 +89,17 @@ test('seat anchors at turn 0 equal the e32ccf8 positions', async () => {
   }
 });
 
-test('route polylines at turn 0 equal the e32ccf8 polylines', async () => {
+test('grid trip polylines for every pair match the pinwheel snapshot, with no crossings', async () => {
   const built = await build();
-  const rigs = Object.entries(built.anchors).map(([id, a]) => ({ id, kind: a.rig.kind || 'desk', home: a.rig.home }));
-  const out = {};
-  for (const f of rigs) for (const t of rigs) if (f !== t) out[`${f.id}->${t.id}`] = office.routePoints(f, t, D);
+  const rigs = Object.entries(built.anchors).filter(([id]) => id !== 'you').map(([id, a]) => ({ id, kind: a.rig.kind || 'desk', home: a.rig.home }));
+  const boxes = obstaclesOf(built.root);
+  const out = {}; let crossings = 0;
+  for (const f of rigs) for (const t of rigs) if (f !== t) {
+    out[`${f.id}->${t.id}`] = office.tripRoute(built.walk, f, t, D);
+    assert.ok(out[`${f.id}->${t.id}`], `${f.id}->${t.id}: no grid path`);
+    crossings += checkRoute(out[`${f.id}->${t.id}`], boxes).crossings.length;
+  }
+  assert.equal(crossings, 0);
   assert.equal(sha(JSON.stringify(out)), BASE_ROUTES_SHA);
 });
 
@@ -122,31 +128,71 @@ test('turns 0 and 3 show the face to the camera (camera looks from +x +y)', () =
   assert.deepEqual(seen, [0, 3]);
 });
 
-// The app routes PA <-> desk staff and PA <-> booth. The boss is never routed, so the boss room is not checked here.
-const routedRigs = (built) => Object.entries(built.anchors).filter(([id]) => id !== 'you').map(([id, a]) => ({ id, kind: a.rig.kind || 'desk', home: a.rig.home }));
-test('route check: PA and desk routes cross no furniture', async () => {
-  const built = await build();
-  const boxes = obstaclesOf(built.root);
-  assert.ok(boxes.length > 50, `found ${boxes.length} obstacles`);
-  const rigs = routedRigs(built).filter((r) => r.id !== 's0');
-  let total = 0, minClear = Infinity;
-  for (const f of rigs) for (const t of rigs) if (f !== t) {
-    const r = checkRoute(office.routePoints(f, t, D), boxes);
-    total += r.crossings.length; minClear = Math.min(minClear, r.minClear);
-  }
-  assert.equal(total, 0);
-  console.log(`route check (desks): ${boxes.length} obstacles, min clearance ${minClear.toFixed(3)} m`);
+// ---- path-finding (pure, no scene) ----
+const box = (x0, x1, y0, y1) => ({ x0, x1, y0, y1 });
+test('A*: finds a path around a box, and the path crosses no box', () => {
+  const solids = [box(4, 6, 0, 4)];
+  const p = office.findPath(office.walkGrid(solids, 10, 10), { x: 1, z: 2 }, { x: 9, z: 2 });
+  assert.ok(p, 'path found');
+  assert.equal(checkRoute(p, solids).crossings.length, 0);
+  assert.ok(Math.max(...p.map((q) => q.z)) > 4, 'goes around the low end of the box');
 });
-// Known finding, not a pass: the booth route (y 12.55, x 3.6 to 6.3) runs into the plant at (5.45, 12.25). Stage 2 must clear this.
-test('route check: booth route is clear of the booth plant', async () => {
-  const built = await build();
+test('A*: returns null when the goal is sealed in', () => {
+  const ring = [box(4, 6, 4, 4.4), box(4, 6, 5.6, 6), box(4, 4.4, 4, 6), box(5.6, 6, 4, 6)];
+  assert.equal(office.findPath(office.walkGrid(ring, 10, 10), { x: 1, z: 1 }, { x: 5, z: 5 }), null);
+});
+test('A*: smoothed path keeps 0.19 m or more from every solid', () => {
+  const solids = [box(3, 5, 0, 6), box(7, 8, 3, 10)];
+  const p = office.findPath(office.walkGrid(solids, 10, 10), { x: 1, z: 1 }, { x: 9, z: 9 });
+  assert.ok(p, 'path found');
+  let minD = Infinity;
+  for (let i = 1; i < p.length; i++) for (let k = 0; k <= 200; k++) {
+    const x = p[i - 1].x + (p[i].x - p[i - 1].x) * k / 200, z = p[i - 1].z + (p[i].z - p[i - 1].z) * k / 200;
+    for (const s of solids) minD = Math.min(minD, Math.hypot(Math.max(s.x0 - x, 0, x - s.x1), Math.max(s.y0 - z, 0, z - s.y1)));
+  }
+  assert.ok(minD >= 0.19, `clearance ${minD.toFixed(3)} m`);
+});
+
+// ---- pinwheel layout: every staff trip at 5 and 8 desk staff ----
+const routedRigs = (built) => Object.entries(built.anchors).filter(([id]) => id !== 'you').map(([id, a]) => ({ id, kind: a.rig.kind || 'desk', home: a.rig.home }));
+const DESK = (n) => Array.from({ length: n }, (_, i) => ({ id: `d${i + 1}`, name: `D${i + 1}`, role: ['Engineer', 'Designer', 'QA', 'PM'][i % 4], colour: ['#3A86FF', '#2EC4B6', '#FF6B6B', '#06D6A0', '#FFD166', '#EF476F', '#118AB2', '#8338EC'][i] }));
+const CS = { id: 's0', name: 'Cust', role: 'Customer Support', colour: '#FF9F1C' };
+// fixed points in the room: pantry counter, meeting table edge, printer
+const TARGETS = { pantry: { x: 11.8, z: 1.6 }, meeting: { x: 11.2, z: 11.0 }, printer: { x: 12.55, z: 2.6 } };
+async function tripCheck(n) {
+  const built = await build([CS, ...DESK(n)]);
   const boxes = obstaclesOf(built.root);
   const rigs = routedRigs(built);
-  const hit = new Set();
-  for (const f of rigs) for (const t of rigs) if (f !== t && (f.id === 's0' || t.id === 's0')) {
-    for (const c of checkRoute(office.routePoints(f, t, D), boxes).crossings) hit.add([c.box.x0, c.box.x1, c.box.y0, c.box.y1].map((v) => v.toFixed(2)).join(','));
+  const cs = rigs.find((r) => r.kind === 'booth');
+  const seats = rigs.filter((r) => r.kind !== 'booth');
+  const trips = [];
+  for (const r of seats) {
+    trips.push([`${r.id}->booth`, office.tripRoute(built.walk, r, cs, D)]);
+    for (const [name, pt] of Object.entries(TARGETS)) trips.push([`${r.id}->${name}`, office.findPath(built.walk, office.walkPoints(r, D).side, pt)]);
   }
-  assert.deepEqual([...hit].sort(), []);
+  const bad = [];
+  for (const [name, p] of trips) {
+    if (!p) { bad.push(`${name}: no path`); continue; }
+    const c = checkRoute(p, boxes).crossings.length;
+    if (c) bad.push(`${name}: ${c} crossings`);
+  }
+  return { trips: trips.length, bad, built };
+}
+test('pinwheel, 5 desk staff: every seat and PA trip (booth, pantry, meeting, printer) has no furniture crossing', async () => {
+  const r = await tripCheck(5);
+  assert.equal(r.trips, 24);
+  assert.deepEqual(r.bad, []);
+});
+test('pinwheel, 8 desk staff: every seat and PA trip (booth, pantry, meeting, printer) has no furniture crossing', async () => {
+  const r = await tripCheck(8);
+  assert.equal(r.trips, 36);
+  assert.deepEqual(r.bad, []);
+});
+test('booth trips end with the fixed booth lane point and booth visit point', async () => {
+  const built = await build([CS, ...DESK(5)]);
+  const rigs = routedRigs(built);
+  const p = office.tripRoute(built.walk, rigs.find((r) => r.id === 'pa'), rigs.find((r) => r.kind === 'booth'), D);
+  assert.deepEqual(p.slice(-2), [{ x: 6.3, z: D + 1.05 }, { x: 3.75, z: D + 1.1 }]);
 });
 test('route check helper is not vacuous: a segment through a desk is reported', async () => {
   const built = await build();

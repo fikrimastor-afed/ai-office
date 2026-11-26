@@ -401,7 +401,15 @@ body.term #work.board{top:calc(var(--top) + var(--sub) + 56px)}
 .ut th:not(:first-child),.ut td:not(:first-child){text-align:right}
 /* person tags: status sits right under the name and role, same width; a longer status scrolls (marquee) */
 .ov .tag[data-id]{gap:0;align-items:stretch}
-.ov .tag[data-id] .nm{border-radius:var(--rs) var(--rs) 0 0}
+.ov .tag[data-id] .nm{border-radius:var(--rs)}
+.ov .tag[data-id] .more{display:none}
+.ov .tag[data-id]:is(:hover,:focus-visible,.chat) .more{display:flex;flex-direction:column;align-items:stretch}
+.ov .tag[data-id]:is(:hover,:focus-visible,.chat) .nm{border-radius:var(--rs) var(--rs) 0 0}
+.tag .nm .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--grey)}
+.tag .nm .dot.working{background:var(--green)}.tag .nm .dot.waiting{background:var(--amber)}
+.tag .more .mgr{align-self:stretch;height:auto;border-radius:0;font-size:11px;padding:0 6px;justify-content:center}
+.tag .more .mgr img{width:11px;height:11px}
+.lead{position:absolute;width:1px;background:var(--grey);opacity:.7;pointer-events:none;transform:translateX(-0.5px)}
 .ov .tag[data-id] .pill{display:flex;min-width:0;border-radius:0 0 var(--rs) var(--rs);padding:0 5px 0 3px}
 .ov .tag[data-id] .pill .mq{flex:1;min-width:0;overflow:hidden;text-align:center;container-type:inline-size}
 .ov .tag[data-id] .pill .mq > span{display:inline-block;white-space:nowrap;animation:mq 8s ease-in-out infinite alternate}
