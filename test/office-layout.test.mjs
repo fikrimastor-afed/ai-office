@@ -32,7 +32,7 @@ const BASE_ROUTES_SHA = 'f42bc78f24a3db8324ed0ffdcf50f48a5ca1fc271a1f4f60691e756
 const BASE_SEATS = { pa: [7.05, 9.205], s1: [4.65, 3.9050000000000002], s2: [4.65, 6.505], s3: [6.705, 4.85], s4: [6.705, 7.449999999999999], s5: [12.75, 3.6050000000000004], s6: [12.75, 6.205], s7: [9.305, 4.55], s0: [2.6, 12.85], you: [2.1, 0.92] };
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 
-async function build(staff = STAFF) { return office.buildOffice({ staff, pa: PA, status: {}, queue: [], company: 'X' }); }
+async function build(staff = STAFF, layout = 'pinwheel') { return office.buildOffice({ staff, pa: PA, status: {}, queue: [], company: 'X', layout }); }
 function rowsOf(root) {
   const rows = []; let meshes = 0;
   root.traverse((o) => {
@@ -158,9 +158,15 @@ const routedRigs = (built) => Object.entries(built.anchors).filter(([id]) => id 
 const DESK = (n) => Array.from({ length: n }, (_, i) => ({ id: `d${i + 1}`, name: `D${i + 1}`, role: ['Engineer', 'Designer', 'QA', 'PM'][i % 4], colour: ['#3A86FF', '#2EC4B6', '#FF6B6B', '#06D6A0', '#FFD166', '#EF476F', '#118AB2', '#8338EC'][i] }));
 const CS = { id: 's0', name: 'Cust', role: 'Customer Support', colour: '#FF9F1C' };
 // fixed points in the room: pantry counter, meeting table edge, printer
-const TARGETS = { pantry: { x: 11.8, z: 1.6 }, meeting: { x: 11.2, z: 11.0 }, printer: { x: 12.55, z: 2.6 } };
-async function tripCheck(n) {
-  const built = await build([CS, ...DESK(n)]);
+// per preset: pantry counter, meeting spot (table edge), printer front. Fixed points the staff walk to.
+const TARGETS_BY = {
+  pinwheel: { pantry: { x: 11.8, z: 1.6 }, meeting: { x: 11.2, z: 11.0 }, printer: { x: 12.55, z: 2.6 } },
+  horseshoe: { pantry: { x: 11.8, z: 1.6 }, meeting: { x: 6.0, z: 0.9 }, printer: { x: 12.55, z: 2.6 } },
+  triads: { pantry: { x: 11.8, z: 1.6 }, meeting: { x: 4.7, z: 10.0 }, printer: { x: 12.55, z: 2.6 } },
+};
+async function tripCheck(n, layout = 'pinwheel') {
+  const built = await build([CS, ...DESK(n)], layout);
+  const TARGETS = TARGETS_BY[layout];
   const boxes = obstaclesOf(built.root);
   const rigs = routedRigs(built);
   const cs = rigs.find((r) => r.kind === 'booth');
@@ -170,13 +176,14 @@ async function tripCheck(n) {
     trips.push([`${r.id}->booth`, office.tripRoute(built.walk, r, cs, D)]);
     for (const [name, pt] of Object.entries(TARGETS)) trips.push([`${r.id}->${name}`, office.findPath(built.walk, office.walkPoints(r, D).side, pt)]);
   }
+  built.seatTurns = seats.map((r) => r.home.turn || 0);
   const bad = [];
   for (const [name, p] of trips) {
     if (!p) { bad.push(`${name}: no path`); continue; }
     const c = checkRoute(p, boxes).crossings.length;
     if (c) bad.push(`${name}: ${c} crossings`);
   }
-  return { trips: trips.length, bad, built };
+  return { trips: trips.length, bad, built, turns: built.seatTurns };
 }
 test('pinwheel, 5 desk staff: every seat and PA trip (booth, pantry, meeting, printer) has no furniture crossing', async () => {
   const r = await tripCheck(5);
@@ -200,3 +207,28 @@ test('route check helper is not vacuous: a segment through a desk is reported', 
   const r = checkRoute([{ x: 5.0, z: 3.0 }, { x: 5.0, z: 5.5 }], boxes);
   assert.ok(r.crossings.length > 0);
 });
+
+// ---- layout presets: each one, at 5 and 8 desk staff ----
+for (const layout of ['horseshoe', 'triads']) {
+  test(`${layout}, 5 desk staff: every seat and PA trip (booth, pantry, meeting, printer) has no furniture crossing`, async () => {
+    const r = await tripCheck(5, layout);
+    assert.equal(r.trips, 24);
+    assert.deepEqual(r.bad, []);
+  });
+  test(`${layout}, 8 desk staff: every seat and PA trip (booth, pantry, meeting, printer) has no furniture crossing`, async () => {
+    const r = await tripCheck(8, layout);
+    assert.equal(r.trips, 36);
+    assert.deepEqual(r.bad, []);
+  });
+}
+for (const layout of ['pinwheel', 'horseshoe', 'triads']) {
+  test(`${layout}: every seat faces the camera (turn 0 or 3) at 8 desk staff`, async () => {
+    const r = await tripCheck(8, layout);
+    for (const t of r.turns) assert.ok(t === 0 || t === 3, `turn ${t}`);
+  });
+}
+test('unknown layout id falls back to pinwheel (same scene)', async () => {
+  const a = rowsOf((await build(STAFF, 'nope')).root), b = rowsOf((await build(STAFF, 'pinwheel')).root);
+  assert.equal(sha(JSON.stringify(a.rows)), sha(JSON.stringify(b.rows)));
+});
+

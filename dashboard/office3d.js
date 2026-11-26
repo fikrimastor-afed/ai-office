@@ -10,14 +10,30 @@ const W = 14, D = 11.5;
 const BOSS = { colour: '#8338EC', skin: '#EBBE93', hair: '#3A2A22' };
 // desk slots in the team area: a grid of 3 per row, filled row by row. Row 1 starts below the boss
 // room's glass (the walking lane runs behind each row). The last row has 2: the meeting table is there.
-// slot = [x, y, turn]: the desk's anchor and quarter turn (0..3, see TURN). Pinwheel: two 4-desk blocks, each around a plant hub,
-// turns alternate 0 / 3 so every seat faces the camera (turn 0: seat north of the desk, turn 3: seat west of it).
-// Block A (staff 1-4) is left of the PA; block B (staff 5-8) is right of it. Desk body centres: turn 0 = anchor + (0.7, 0.575), turn 3 = anchor + (0.575, -0.7).
-const SLOTS = [
-  [3.9, 4.325, 0], [3.9, 6.925, 0], [7.125, 5.6, 3], [7.125, 8.2, 3],   // block A: top-left, bottom-left, top-right, bottom-right
-  [12.0, 4.025, 0], [12.0, 6.625, 0], [9.725, 5.3, 3], [9.725, 7.9, 3], // block B: top-right, bottom-right, top-left, bottom-left
-];
-// quarter turns in floor coords, [a, b, c, d]: (dx, dy) -> (a*dx + b*dy, c*dx + d*dy). Turn 1 is (dx, dy) -> (-dy, dx).
+// Floor plans. slots: [x, y, turn] desk anchors, filled in order (staff 1, 2, ...). A slot with a 4th item 'stool' is a
+// chair at a table, not a desk. pa: manager desk anchor. hubs: [x, y, size] plants. decor: which extra pieces the plan draws.
+// Turns are only 0 and 3 (faces show to the camera): turn 0 seat is north of its desk, turn 3 seat is west of it.
+// pinwheel: two 4-desk blocks around plant hubs; block A = staff 1-4, block B = staff 5-8. Pairing station in the north strip.
+// horseshoe: a U of 8 desks (back row of 4 facing south, two arms of 2 facing east) open to the front-right, where a big
+//   shared screen stands. The manager's desk sits at the open end. A 0.8 m gap in the back row links the U to the north strip. Meeting table moves to the north strip.
+// triads: two groups of 3 desks in an L around a round hub (an L, not a true 120 degree ring: turns 0/3 only), plus a long
+//   harvest table on the front with stools. Staff 7-8 sit at the table. The harvest table doubles as the meeting table.
+export const LAYOUTS = {
+  pinwheel: {
+    slots: [[3.9, 4.325, 0], [3.9, 6.925, 0], [7.125, 5.6, 3], [7.125, 8.2, 3], [12.0, 4.025, 0], [12.0, 6.625, 0], [9.725, 5.3, 3], [9.725, 7.9, 3]],
+    pa: [6.3, 9.625, 0], hubs: [[6.0, 5.9, 0.7], [11.28, 3.2, 0.7]], decor: 'pairing', plantB: [13.45, 8.7, 1.0],
+  },
+  horseshoe: {
+    slots: [[4.8, 4.225, 0], [7.0, 4.225, 0], [9.8, 4.225, 0], [12.0, 4.225, 0], [5.025, 7.3, 3], [5.025, 9.5, 3], [11.425, 7.3, 3], [11.425, 9.5, 3]],
+    pa: [6.9, 9.825, 0], hubs: [[8.6, 7.4, 0.8]], decor: 'screen', plantB: [13.65, 6.2, 1.0],
+  },
+  triads: {
+    slots: [[5.3, 3.625, 0], [7.225, 6.9, 3], [3.9, 6.825, 0], [10.3, 3.625, 0], [12.225, 6.9, 3], [8.9, 6.825, 0],
+      [6.0, 9.05, 0, 'stool'], [7.6, 9.05, 0, 'stool']],
+    pa: [10.5, 9.025, 0], hubs: [[6.0, 5.8, 0.5], [11.0, 5.8, 0.5]], decor: 'harvest', plantB: [13.45, 8.7, 1.0],
+  },
+};
+export const LAYOUT_IDS = Object.keys(LAYOUTS);// quarter turns in floor coords, [a, b, c, d]: (dx, dy) -> (a*dx + b*dy, c*dx + d*dy). Turn 1 is (dx, dy) -> (-dy, dx).
 const TURN = [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0]];
 export function turnVec(q, dx, dy) { const [a, b, c, d] = TURN[q & 3]; return [a * dx + b * dy, c * dx + d * dy]; }
 // lowest corner of a rotated box (corner lx,ly, size w x d, in desk-relative floor coords)
@@ -128,10 +144,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const hex = (v, d) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : d);
 
 // Who sits where. Exported so the page can match tags to people.
-export function seatPlan(staff) {
+export function seatPlan(staff, slots = LAYOUTS.pinwheel.slots) {
   const cs = staff.find((s) => CS_ROLE.test(s.role || ''));
   const rest = staff.filter((s) => s !== cs);
-  return { cs: cs || null, desks: rest.slice(0, SLOTS.length).map((s, i) => ({ ...s, slot: SLOTS[i] })) };
+  return { cs: cs || null, desks: rest.slice(0, slots.length).map((s, i) => ({ ...s, slot: slots[i] })) };
 }
 const STATUS = {
   working: { cls: 'working', icon: 'laptop', label: 'Working' },
@@ -159,7 +175,8 @@ const loadImg = src => new Promise(r => { const i = new Image(); i.onload = () =
 export async function buildOffice(opt = {}) {
   const status = opt.status || {};
   const st = (id) => (status[id] && status[id].status) || 'sleeping';
-  const plan = seatPlan(opt.staff || []);
+  const L = LAYOUTS[opt.layout] || LAYOUTS.pinwheel; // unknown or missing id: pinwheel
+  const plan = seatPlan(opt.staff || [], L.slots);
   const pa = opt.pa || { name: 'Manager', colour: '#8338EC', look: { scarf: true, skin: '#F2C9A0' } };
   await document.fonts.load('700 40px Fredoka'); await document.fonts.load('900 20px Nunito');
   const emoji = {};
@@ -475,7 +492,7 @@ export async function buildOffice(opt = {}) {
     v.rig = rig; v.group = g; v.head = head;
     return v;
   }
-  // q: quarter turn of the desk (see SLOTS); the person faces the desk's front, plus the same 0.3 rad lean
+  // q: quarter turn of the desk (see LAYOUTS); the person faces the desk's front, plus the same 0.3 rad lean
   function staff(p, x, y, s, q = 0) {
     const col = hex(p.colour, '#8D93A5'), look = p.look || {};
     return person(x, y, {
@@ -539,6 +556,11 @@ export async function buildOffice(opt = {}) {
   planeX(1.9, 1.3, 1.6, 1.975, 13.93, texMat(qaTex));
 
   // ---------------- meeting corner ----------------
+  if (L.decor === 'screen') { // horseshoe: the round table moves to the north strip, clear of the U and the screen
+    CYL(7.4, 1.6, 0, 0.25, 0.4, 0.06, '#D9DDE8'); CYL(7.4, 1.6, 0.06, 0.08, 0.08, 0.66, '#D9DDE8', 16); CYL(7.4, 1.6, 0.72, 1.0, 1.0, 0.08, '#FFF3DE');
+    B(5.2, 1.3, 0, 0.7, 0.62, 0.45, '#FF9F1C', 0.12); B(8.9, 1.3, 0, 0.62, 0.7, 0.45, '#3A86FF', 0.12); B(7.0, 2.7, 0, 0.7, 0.62, 0.45, '#FF6B6B', 0.12);
+  }
+  if (L.decor === 'pairing') {
   CYL(12.3, 9.7, 0, 0.25, 0.4, 0.06, '#D9DDE8');
   CYL(12.3, 9.7, 0.06, 0.08, 0.08, 0.66, '#D9DDE8', 16);
   CYL(12.3, 9.7, 0.72, 1.0, 1.0, 0.08, '#FFF3DE');
@@ -547,7 +569,8 @@ export async function buildOffice(opt = {}) {
   B(13.2, 10.65, 0, 0.62, 0.62, 0.45, '#FF6B6B', 0.12);
   B(11.9, 9.4, 0.8, 0.5, 0.36, 0.04, '#FFFFFF', 0.01);
   mug(12.7, 10.0, 0.8, '#2EC4B6');
-  plant(13.4, 3.4, 0.9); plant(13.45, 8.7, 1.0); plant(0.7, 10.25, 1.1); // (13.4, 7.3) moved: block B's bottom-right desk
+  }
+  plant(13.4, 3.4, 0.9); plant(...L.plantB); plant(0.7, 10.25, 1.1); // (13.4, 7.3) moved: block B's bottom-right desk
   // printer
   B(12.95, 2.3, 0, 0.8, 0.7, 0.65, '#E8EEF7', 0.05);
   B(13.05, 2.4, 0.65, 0.6, 0.5, 0.14, '#C9D1E3', 0.04);
@@ -571,12 +594,28 @@ export async function buildOffice(opt = {}) {
   });
   planeX(10.4, 8.2, 1.6, 2.4, 0.02, texMat(designTex));
 
+  if (L.decor === 'pairing') {
   // ---------------- pairing station (freestanding, north strip): screen between the pair and the back wall, the pair faces the camera ----------------
   B(5.85, 0.8, 0, 0.2, 0.2, 0.35, '#2E3248', 0.03);                  // screen stand
   B(4.9, 0.85, 0.35, 2.2, 0.07, 0.9, '#1F2544', 0.03);               // screen: its back faces the camera
   B(4.9, 1.6, 0, 2.2, 0.6, 0.72, '#FFF3DE', 0.04);                   // shared table
   chair(5.6, 2.7, '#4A4F66'); chair(6.5, 2.7, '#4A4F66');            // the pair, seats turn 0 (faces the camera)
-
+  }
+  if (L.decor === 'screen') { // horseshoe: one big shared screen, front-right of the U. Its display faces the U; the camera sees its back (a board)
+    B(10.6, 10.55, 0, 0.1, 0.25, 0.35, '#2E3248', 0.02); B(12.9, 10.55, 0, 0.1, 0.25, 0.35, '#2E3248', 0.02); // stand feet
+    B(10.2, 10.6, 0.35, 3.2, 0.08, 1.5, '#1F2544', 0.03);
+    const burnTex = canvasTex(1000, 470, (g, w, h) => { // burndown board: bars and a line, like the CI board
+      g.fillStyle = '#1F2544'; g.fillRect(0, 0, w, h); g.fillStyle = '#B5EAD7'; g.font = '700 58px Fredoka'; g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.fillText('Sprint burndown', 40, 60);
+      g.strokeStyle = '#FFD166'; g.lineWidth = 8; g.beginPath(); [[40, 380], [240, 320], [440, 250], [640, 190], [840, 120]].forEach(([x, y], k) => (k ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+      g.strokeStyle = '#3A86FF'; g.setLineDash([18, 14]); g.beginPath(); g.moveTo(40, 420); g.lineTo(960, 110); g.stroke(); g.setLineDash([]);
+    });
+    planeZ(10.3, 13.3, 0.4, 1.8, 10.685, texMat(burnTex, { r: 0.4 }));
+  }
+  if (L.decor === 'harvest') { // triads: long harvest table, front centre; its west end is the meeting spot
+    B(5.2, 9.6, 0, 4.6, 0.7, 0.72, '#FFF3DE', 0.04);
+    [6.0, 7.6, 9.2].forEach((x) => chair(x, 10.85, '#4A4F66'));   // empty stools on the far side (backrest faces the table)
+  }
   // ---------------- customer service booth (outside the office) ----------------
   const CY = D + 1.35; // Aina's seat
   const boothTex = canvasTex(540, 230, (g, w, h) => { g.fillStyle = '#FFF0EE'; g.fillRect(0, 0, w, h); g.strokeStyle = '#FFC9C2'; g.lineWidth = 8; g.strokeRect(10, 10, w - 20, h - 20); });
@@ -602,10 +641,13 @@ export async function buildOffice(opt = {}) {
   // ---------------- team desks ----------------
   // the PA (manager) sits just outside the boss room, between the boss and the team
   // PA desk: front centre, between the two blocks (turn 0)
-  desk(6.3, 9.625, hex(pa.colour, '#8338EC'));
-  anchors.pa = staff(pa, 6.3 + 0.75, 9.625 - 0.42, st('pa'));
+  const [pax, pay, paq] = L.pa;
+  desk(pax, pay, hex(pa.colour, '#8338EC'), paq);
+  anchors.pa = staff(pa, pax + 0.75, pay - 0.42, st('pa'), paq);
   plan.desks.forEach((s, i) => {
-    const [x, y, q = 0] = s.slot; desk(x, y, hex(s.colour, '#8D93A5'), q);
+    const [x, y, q = 0, kind] = s.slot;
+    if (kind === 'stool') { chair(x, y, '#4A4F66'); anchors[s.id] = staff(s, x, y + 0.03, st(s.id), 0); return; } // seat at a table, facing the camera
+    desk(x, y, hex(s.colour, '#8D93A5'), q);
     const f = fr(x, y, q);
     const [sx, sy] = f.at(0.75, -0.42);
     anchors[s.id] = staff(s, sx, sy, st(s.id), q);
@@ -618,7 +660,7 @@ export async function buildOffice(opt = {}) {
   });
 
   // hub plants in the middle of each block (top about 1.1 m, below a seated head)
-  plant(6.0, 5.9, 0.7); plant(11.28, 3.2, 0.7); // block B's hub sits at the north end: its middle column stays open for walking
+  for (const [hx, hy, hs] of L.hubs) plant(hx, hy, hs); // pinwheel: block B's hub sits at the north end, so its middle column stays open
 
   // ---------------- customers queue outside ----------------
   // queue to the right of the counter, first in line at the counter end

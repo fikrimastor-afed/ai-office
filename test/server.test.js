@@ -240,6 +240,21 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       assert.ok(got.includes('approvals'));
     });
 
+    await test('office layout: saved in office.json, unknown id refused, company-only body still works', async () => {
+      assert.strictEqual((await req('GET', '/api/office')).body.layout, 'pinwheel');
+      const ok = await req('PUT', '/api/office', { layout: 'horseshoe' });
+      assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+      assert.strictEqual(ok.body.layout, 'horseshoe');
+      assert.strictEqual(JSON.parse(read('office.json')).layout, 'horseshoe');
+      const bad = await req('PUT', '/api/office', { layout: 'spaceship' });
+      assert.ok(bad.status >= 400 && bad.status < 500, `invalid layout gives ${bad.status}`);
+      assert.strictEqual(JSON.parse(read('office.json')).layout, 'horseshoe');
+      const co = await req('PUT', '/api/office', { company: 'Kedai Ali' });
+      assert.strictEqual(co.status, 200);
+      assert.strictEqual(JSON.parse(read('office.json')).layout, 'horseshoe', 'company-only save keeps the layout');
+      assert.strictEqual((await req('PUT', '/api/office', { layout: 'pinwheel' })).status, 200);
+    });
+
     await test('rename company: office.json, generated files and archived copies', async () => {
       const oldName = 'Kedai Ali';
       const newName = 'Kedai $& Ali Sdn Bhd'; // $& must stay literal

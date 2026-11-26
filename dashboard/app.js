@@ -230,6 +230,7 @@ async function draw3d() {
   const open = S.inbox.filter((x) => x.status !== 'done').sort((a, b) => Number(a.ticket) - Number(b.ticket));
   const opts = {
     company: S.office.company,
+    layout: S.office.layout || 'pinwheel', // a change rebuilds the scene (the layout is part of the scene key)
     pa: { name: pa().name, colour: pa().colour, look: pa().look || { scarf: true, skin: '#F2C9A0' } },
     staff: S.staff.map(({ id, name, role, colour, look }) => ({ id, name, role, colour, look })),
     status: Object.fromEntries(Object.entries(S.status.people).map(([k, x]) => [k, { status: x.status, task: (x.status === 'working' && ((S.tasks || []).find((t) => t.staff === k) || {}).step) || taskText(k, x.task) }])),
@@ -617,6 +618,12 @@ function renderInboxSide() {
 }
 
 // ------------------------------------------------------------------ settings
+// Office floor plans: id, label, one-line description (dashboard/office3d.js LAYOUTS)
+const LAYOUTS_UI = [
+  ['pinwheel', 'Pinwheel Studio', 'Two blocks of four desks around plant hubs, with a pairing station in the north strip.'],
+  ['horseshoe', 'Horseshoe War Room', 'Eight desks in a U facing one big shared burndown screen. The manager sits at the open end.'],
+  ['triads', 'Triads and Harvest Table', 'Two groups of three desks around round hubs, and a long harvest table with stools for stand-ups.'],
+];
 function renderSettings() {
   const nav = [['general', 'info', 'General'], ['addons', 'plug', 'Add-ons'], ['api', 'file-text', 'Office key and API'], ['linked', 'folder-open', 'Linked folders'], ['cleanup', 'trash-2', 'Clean up']];
   const CLEAN = [
@@ -633,6 +640,8 @@ function renderSettings() {
   const body = {
     general: `<h3 style="margin-bottom:12px">General</h3><div class="kv">
       <span class="muted">Company</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input class="in" id="coName" aria-label="Company name" maxlength="80" value="${esc(S.office.company)}" style="max-width:320px"><button class="btn sm" id="coSave">Save</button></span>
+      <span class="muted">Office layout</span><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select class="in" id="lyPick" aria-label="Office layout" style="max-width:320px">${LAYOUTS_UI.map(([k, l]) => `<option value="${k}" ${(S.office.layout || 'pinwheel') === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select><button class="btn sm" id="lySave">Save layout</button></span>
+      <span></span><span class="muted" id="lyNote" style="max-width:520px;line-height:1.5">${esc(LAYOUTS_UI.find(([k]) => k === (S.office.layout || 'pinwheel'))[2])}</span>
       <span class="muted">Manager</span><span>${esc(pa().name)}</span>
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
       <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span></div>
@@ -672,6 +681,9 @@ function renderSettings() {
   wireSplits($('#v-settings'));
   $$('[data-s]').forEach((b) => { b.onclick = () => { S.settings = b.dataset.s; renderSettings(); }; });
   const ks = $('#keyShow'); if (ks) ks.onclick = () => { $('#keyV').textContent = KEY; ks.remove(); };
+  const ly = $('#lySave'), lyPick = $('#lyPick');
+  if (lyPick) lyPick.onchange = () => { $('#lyNote').textContent = LAYOUTS_UI.find(([k]) => k === lyPick.value)[2]; };
+  if (ly) ly.onclick = () => act(() => api('office', 'PUT', { layout: lyPick.value }), 'Layout saved').then(() => refresh(['office']));
   const co = $('#coSave');
   if (co) co.onclick = () => act(() => api('office', 'PUT', { company: $('#coName').value }), 'Company saved').then(() => refresh(['office']));
   if (S.settings === 'linked') {
