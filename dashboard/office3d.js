@@ -11,7 +11,30 @@ const BOSS = { colour: '#8338EC', skin: '#EBBE93', hair: '#3A2A22' };
 // desk slots in the team area: a grid of 3 per row, filled row by row. Row 1 starts below the boss
 // room's glass (the walking lane runs behind each row). The last row has 2: the meeting table is there.
 const COLS = [4.8, 7.9, 11.0], ROWS = [4.4, 6.95, 9.5];
-const SLOTS = ROWS.flatMap((y) => COLS.map((x) => [x, y])).slice(0, 8);
+// slot = [x, y, turn]. turn is a quarter turn (0..3) of the whole desk about its slot point: 0 is the layout as drawn.
+const SLOTS = ROWS.flatMap((y) => COLS.map((x) => [x, y, 0])).slice(0, 8);
+// quarter turns in floor coords, [a, b, c, d]: (dx, dy) -> (a*dx + b*dy, c*dx + d*dy). Turn 1 is (dx, dy) -> (-dy, dx).
+const TURN = [[1, 0, 0, 1], [0, -1, 1, 0], [-1, 0, 0, -1], [0, 1, -1, 0]];
+export function turnVec(q, dx, dy) { const [a, b, c, d] = TURN[q & 3]; return [a * dx + b * dy, c * dx + d * dy]; }
+// lowest corner of a rotated box (corner lx,ly, size w x d, in desk-relative floor coords)
+function minCorner(q, lx, ly, w, d) {
+  const pts = [[lx, ly], [lx + w, ly], [lx, ly + d], [lx + w, ly + d]].map(([px, py]) => turnVec(q, px, py));
+  return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1]))];
+}
+// Where a person stands, walks and sits for a desk turned by r.home.turn. Pure, so the route check can run in node.
+export const AISLE = 4.2;
+export function walkPoints(r, D) {
+  const FRONT = D - 0.4;
+  if (r.kind === 'booth') return { side: { x: 3.35, z: r.home.z }, spot: { x: 3.6, z: D + 1.05 }, visit: { x: 3.75, z: D + 1.1 }, approach: [], lane: [{ x: 6.3, z: D + 1.05 }, { x: 6.3, z: FRONT }, { x: AISLE, z: FRONT }] };
+  const at = (dx, dy) => { const [ux, uy] = turnVec(r.home.turn || 0, dx, dy); return { x: r.home.x + ux, z: r.home.z + uy }; };
+  const spot = at(-0.75, -0.6), visit = at(0.85, -0.1);
+  return { side: at(-0.75, 0), spot, visit, approach: [{ x: visit.x, z: spot.z }], lane: [{ x: AISLE, z: spot.z }] };
+}
+export function routePoints(from, to, D) {
+  const f = walkPoints(from, D), t = walkPoints(to, D);
+  const pts = [f.side, f.spot, ...f.lane, ...[...t.lane].reverse(), ...t.approach, t.visit];
+  return pts.filter((q, i) => i === 0 || Math.hypot(q.x - pts[i - 1].x, q.z - pts[i - 1].z) > 0.05);
+}
 const CS_ROLE = /customer|service|support|reception|front ?desk|help ?desk/i;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hex = (v, d) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : d);
@@ -258,34 +281,47 @@ export async function buildOffice(opt = {}) {
     [[0, 0.55, 0, 0.36], [-0.2, 0.75, 0.12, 0.28], [0.2, 0.85, -0.08, 0.3], [0.03, 1.08, 0.04, 0.24], [0.15, 0.62, 0.22, 0.22]].forEach(([dx, dz, dy, r], i) =>
       SPH(x + dx * big, y + dy * big, (dz + 0.1) * big, r * big, greens[i % 4], { flat: true, seg: 6 }));
   }
-  function chair(x, y, c = '#4A4F66') {
+  // a frame: desk-relative floor coords turned by quarter turn q about (x, y). Turn 0 is the drawn layout, same numbers.
+  const fr = (x, y, q = 0) => ({
+    q, yaw: -q * (Math.PI / 2), // three.js rotation.y for this turn
+    at: (dx, dy) => { const [ux, uy] = turnVec(q, dx, dy); return [x + ux, y + uy]; },
+    dir: (dx, dy) => turnVec(q, dx, dy),
+    box: (lx, ly, z, w, d, h, c, r, o) => { const [mx, my] = minCorner(q, lx, ly, w, d), s = q & 1; return B(x + mx, y + my, z, s ? d : w, s ? w : d, h, c, r, o); },
+  });
+  // a rotated object keeps its yaw; turn 0 leaves the rotation untouched
+  const yawTo = (m, f) => { if (f.q) { m.rotation.order = 'YXZ'; m.rotation.y = f.yaw; } };
+  function chair(x, y, c = '#4A4F66', q = 0) {
     CYL(x, y, 0, 0.3, 0.3, 0.05, '#2E3248', 16);
     CYL(x, y, 0.05, 0.05, 0.05, 0.36, '#2E3248', 12);
-    B(x - 0.36, y - 0.34, 0.4, 0.72, 0.68, 0.12, c, 0.05);
-    B(x - 0.36, y - 0.46, 0.45, 0.72, 0.14, 0.95, c, 0.06);
+    const f = fr(x, y, q);
+    f.box(-0.36, -0.34, 0.4, 0.72, 0.68, 0.12, c, 0.05);
+    f.box(-0.36, -0.46, 0.45, 0.72, 0.14, 0.95, c, 0.06);
   }
-  function laptop(x, y, z, lidCol = '#B8BFD1') {
-    B(x, y, z, 0.78, 0.5, 0.04, '#D5DAE6', 0.015);
+  function laptop(f, lx, ly, z, lidCol = '#B8BFD1') {
+    f.box(lx, ly, z, 0.78, 0.5, 0.04, '#D5DAE6', 0.015);
+    const [px, py] = f.at(lx, ly); // back-left corner of the base, in world
+    const on = (dx, dy) => { const [ux, uy] = f.dir(dx, dy); return [px + ux, py + uy]; };
     const lid = new THREE.Mesh(G(RoundedBoxGeometry, 0.78, 0.5, 0.035, 2, 0.012), mat(lidCol, { r: 0.4, m: 0.3 }));
-    lid.position.set(x + 0.39, z + 0.27, y + 0.52); lid.rotation.x = 0.18; add(lid);
+    const [lx1, lz1] = on(0.39, 0.52); lid.position.set(lx1, z + 0.27, lz1); lid.rotation.x = 0.18; yawTo(lid, f); add(lid);
     const logo = new THREE.Mesh(G(THREE.CircleGeometry, 0.05, 20), mat('#FFFFFF', { em: '#FFFFFF', ei: 0.6 }));
-    logo.position.set(x + 0.39, z + 0.3, y + 0.545); logo.rotation.x = 0.18; scene.add(logo);
+    const [gx, gz] = on(0.39, 0.545); logo.position.set(gx, z + 0.3, gz); logo.rotation.x = 0.18; yawTo(logo, f); scene.add(logo);
     const sticker = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.1375), stickerMat);
-    sticker.position.set(x + 0.6, z + 0.22, y + 0.531); sticker.rotation.x = 0.18; scene.add(sticker);
+    const [sx, sz] = on(0.6, 0.531); sticker.position.set(sx, z + 0.22, sz); sticker.rotation.x = 0.18; yawTo(sticker, f); scene.add(sticker);
   }
   function mug(x, y, z, c) { CYL(x, y, z, 0.09, 0.08, 0.2, c, 20); }
-  // a desk is 2 m wide (x - 0.3 to x + 1.7); the person sits at x + 0.75
-  function desk(x, y, col) {
-    B(x - 0.3, y, 0.78, 2.0, 1.15, 0.08, '#FFFFFF', 0.03);
-    B(x - 0.25, y + 0.05, 0, 0.1, 1.05, 0.78, '#D9DDE8', 0.02);
-    B(x + 1.55, y + 0.05, 0, 0.1, 1.05, 0.78, '#D9DDE8', 0.02);
-    B(x - 0.2, y + 0.95, 0.12, 1.8, 0.08, 0.62, col, 0.03);
+  // a desk is 2 m wide (x - 0.3 to x + 1.7); the person sits at x + 0.75. q turns the whole desk about (x, y).
+  function desk(x, y, col, q = 0) {
+    const f = fr(x, y, q);
+    f.box(-0.3, 0, 0.78, 2.0, 1.15, 0.08, '#FFFFFF', 0.03);
+    f.box(-0.25, 0.05, 0, 0.1, 1.05, 0.78, '#D9DDE8', 0.02);
+    f.box(1.55, 0.05, 0, 0.1, 1.05, 0.78, '#D9DDE8', 0.02);
+    f.box(-0.2, 0.95, 0.12, 1.8, 0.08, 0.62, col, 0.03);
     // laptop to the left of the seat, so the camera can see the typing hand on the right
-    laptop(x - 0.08, y + 0.08, 0.86);
-    mug(x + 1.5, y + 0.66, 0.86, '#FFFFFF');
-    B(x + 0.9, y + 0.4, 0.86, 0.5, 0.38, 0.05, '#FFE08A', 0.01);
-    B(x + 0.95, y + 0.42, 0.91, 0.46, 0.34, 0.03, '#FFFFFF', 0.01);
-    chair(x + 0.75, y - 0.45);
+    laptop(f, -0.08, 0.08, 0.86);
+    const [mx, my] = f.at(1.5, 0.66); mug(mx, my, 0.86, '#FFFFFF');
+    f.box(0.9, 0.4, 0.86, 0.5, 0.38, 0.05, '#FFE08A', 0.01);
+    f.box(0.95, 0.42, 0.91, 0.46, 0.34, 0.03, '#FFFFFF', 0.01);
+    const [cx, cy] = f.at(0.75, -0.45); chair(cx, cy, '#4A4F66', q);
   }
 
   // ---------------- people ----------------
@@ -344,16 +380,17 @@ export async function buildOffice(opt = {}) {
     g.position.set(x, 0, y); g.rotation.y = o.rot ?? 0.35;
     scene.add(g);
     g.traverse((m) => { if (m.isMesh) m.receiveShadow = true; });
-    const rig = { root: g, body, torso, hips, arms, head, open, shut, seated: !!o.seated, home: { x, z: y, rot: o.rot ?? 0.35 } };
+    const rig = { root: g, body, torso, hips, arms, head, open, shut, seated: !!o.seated, home: { x, z: y, rot: o.rot ?? 0.35, turn: o.turn || 0 } };
     const v = new THREE.Vector3(x, SEAT + 0.72 + 0.36 + 0.5, y);
     v.rig = rig; v.group = g; v.head = head;
     return v;
   }
-  function staff(p, x, y, s) {
+  // q: quarter turn of the desk (see SLOTS); the person faces the desk's front, plus the same 0.3 rad lean
+  function staff(p, x, y, s, q = 0) {
     const col = hex(p.colour, '#8D93A5'), look = p.look || {};
     return person(x, y, {
       seated: true, skin: hex(look.skin, '#E8B98A'), tud: look.scarf ? col : null, hair: hex(look.hair, '#2B2233'),
-      shirt: look.scarf ? shadeHex(col, -0.14) : col, rot: 0.3,
+      shirt: look.scarf ? shadeHex(col, -0.14) : col, rot: 0.3 - q * (Math.PI / 2), turn: q,
     });
   }
 
@@ -385,7 +422,7 @@ export async function buildOffice(opt = {}) {
   planeZ(1.7, 2.9, 0.2, 0.56, 2.505, texMat(bossTex, { transparent: true }));
   B(1.25, 1.5, 0.88, 0.75, 0.55, 0.12, '#FFB703', 0.03);
   B(1.32, 1.55, 0.98, 0.62, 0.45, 0.1, '#FFFFFF', 0.01);
-  laptop(1.55, 1.45, 0.88, '#9F7AEA');
+  laptop(fr(0, 0), 1.55, 1.45, 0.88, '#9F7AEA');
   mug(3.3, 2.2, 0.88, '#FFD166');
   chair(2.1, 0.92, '#3D2A6B');
   const youA = person(2.1, 0.92, { seated: true, shirt: BOSS.colour, skin: BOSS.skin, hair: BOSS.hair, rot: 0.3 });
@@ -462,7 +499,7 @@ export async function buildOffice(opt = {}) {
     g.fillText('SUPPORT · ISSUE TRIAGE', w / 2, h / 2 + 6);
   });
   planeZ(1.2, 5.0, 0.42, 0.86, CY + 1.455, texMat(csTex, { transparent: true }));
-  laptop(1.6, CY + 0.6, 1.13);
+  laptop(fr(0, 0), 1.6, CY + 0.6, 1.13);
   SPH(4.6, CY + 1.15, 1.13, 0.1, '#FFC53D', { m: 0.6, r: 0.3 }); CYL(4.6, CY + 1.15, 1.13, 0.13, 0.13, 0.02, '#C98B4F', 16);
   plant(5.45, D + 0.75, 0.9);
 
@@ -471,13 +508,16 @@ export async function buildOffice(opt = {}) {
   desk(1.9, 5.35, hex(pa.colour, '#8338EC'));
   anchors.pa = staff(pa, 1.9 + 0.75, 5.35 - 0.42, st('pa'));
   plan.desks.forEach((s, i) => {
-    const [x, y] = s.slot; desk(x, y, hex(s.colour, '#8D93A5'));
-    anchors[s.id] = staff(s, x + 0.75, y - 0.42, st(s.id));
+    const [x, y, q = 0] = s.slot; desk(x, y, hex(s.colour, '#8D93A5'), q);
+    const f = fr(x, y, q);
+    const [sx, sy] = f.at(0.75, -0.42);
+    anchors[s.id] = staff(s, sx, sy, st(s.id), q);
     // desk toy: a rubber duck (no shadows, it is small)
-    const dx = x + 1.48, dy = y + 0.3;
+    const [dx, dy] = f.at(1.48, 0.3);
     SPH(dx, dy, 0.96, 0.11, '#FFD93D', { cast: false, seg: 12 });
-    SPH(dx + 0.07, dy, 1.09, 0.075, '#FFD93D', { cast: false, seg: 12 });
-    B(dx + 0.12, dy - 0.025, 1.06, 0.07, 0.05, 0.035, '#FF9F1C', 0.012, { cast: false });
+    const [ex, ey] = f.dir(0.07, 0);
+    SPH(dx + ex, dy + ey, 1.09, 0.075, '#FFD93D', { cast: false, seg: 12 });
+    fr(dx, dy, q).box(0.12, -0.025, 1.06, 0.07, 0.05, 0.035, '#FF9F1C', 0.012, { cast: false });
   });
 
   // ---------------- customers queue outside ----------------
@@ -581,19 +621,9 @@ export async function renderOffice(container, opt = {}) {
   for (const p of people) { const a = anchors[p.id]; if (a) { a.rig.id = p.id; a.rig.tag = tags.get(p.id); a.rig.kind = a.rig.kind || (p.id === 'pa' ? 'pa' : 'desk'); rigs.set(p.id, a.rig); } }
   const all = [...rigs.values(), youA.rig, ...custA.map((a) => a.rig)];
   youA.rig.kind = 'boss'; custA.forEach((a, i) => { a.rig.kind = 'customer'; a.rig.wave = i === 2; });
-  const AISLE = 4.2, FRONT = D - 0.4;
-  // where a person steps to when standing up, and where a visitor stands next to them
-  // step out sideways (not through the chair back), then into the lane behind the desks
-  const side = (r) => (r.kind === 'booth' ? { x: 3.35, z: r.home.z } : { x: r.home.x - 0.75, z: r.home.z });
-  const spot = (r) => (r.kind === 'booth' ? { x: 3.6, z: D + 1.05 } : { x: r.home.x - 0.75, z: r.home.z - 0.6 });
-  // visitors stand at the right of the chair: the side the camera sees
-  const visit = (r) => (r.kind === 'booth' ? { x: 3.75, z: D + 1.1 } : { x: r.home.x + 0.85, z: r.home.z - 0.1 });
-  const approach = (r) => (r.kind === 'booth' ? [] : [{ x: visit(r).x, z: spot(r).z }]);
-  const toAisle = (r) => (r.kind === 'booth' ? [{ x: 6.3, z: D + 1.05 }, { x: 6.3, z: FRONT }, { x: AISLE, z: FRONT }] : [{ x: AISLE, z: spot(r).z }]);
-  function route(from, to) {
-    const pts = [side(from), spot(from), ...toAisle(from), ...toAisle(to).reverse(), ...approach(to), visit(to)];
-    return pts.filter((q, i) => i === 0 || Math.hypot(q.x - pts[i - 1].x, q.z - pts[i - 1].z) > 0.05);
-  }
+  // step-out, lane and visitor points: walkPoints / routePoints (module scope, pure)
+  const side = (r) => walkPoints(r, D).side;
+  const route = (from, to) => routePoints(from, to, D);
   const back = (r, path) => path.slice(0, -1).reverse(); // ends at the side of their own chair
 
   // ---------------- poses ----------------
