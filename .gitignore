@@ -5,3 +5,9 @@ CLAUDE.local.md
 
 # session handoff notes are local-only working notes
 /docs/handoffs
+
+.projectmem/events.jsonl
+.projectmem/watch.pid
+.projectmem/watch.log
+.projectmem/structure.json
+.projectmem/
