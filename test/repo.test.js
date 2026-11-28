@@ -390,14 +390,14 @@ try {
     assert.deepStrictEqual(fs.readdirSync(marks), []);
   });
 
-  test('filter.lfs values must start with "git-lfs "; required may be anything', () => {
+  test('filter.lfs values other than the standard ones are refused; required may be anything', () => {
     const d = mk('lfsv');
     G(d, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f'); G(d, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f'); G(d, 'config', 'filter.lfs.process', 'git-lfs filter-process'); G(d, 'config', 'filter.lfs.required', 'true');
     assert(R.safeConfig(d).ok);
     for (const k of ['clean', 'smudge', 'process']) {
       G(d, 'config', `filter.lfs.${k}`, '/tmp/evil.sh');
       assert(R.safeConfig(d).err.includes(`filter.lfs.${k}`), k);
-      G(d, 'config', `filter.lfs.${k}`, `git-lfs ${k}`);
+      G(d, 'config', `filter.lfs.${k}`, { clean: 'git-lfs clean -- %f', smudge: 'git-lfs smudge -- %f', process: 'git-lfs filter-process' }[k]);
     }
     G(d, 'config', 'filter.lfs.required', '/tmp/evil'); assert(R.safeConfig(d).ok);
   });
@@ -426,6 +426,20 @@ try {
     assert.strictEqual(G(b1, 'for-each-ref', '--format=%(refname)'), '');
     G(d, 'config', 'gpg.program', '/bin/true');
     assert(/gpg\.program/.test(R.createBranch(d, 'office/y', base).err));
+  });
+  test('filter.lfs clean, smudge and process pass only with the standard git-lfs values', () => {
+    const d = mk('lfsstd');
+    const std = [['clean', 'git-lfs clean -- %f'], ['smudge', 'git-lfs smudge -- %f'], ['smudge', 'git-lfs smudge --skip -- %f'], ['process', 'git-lfs filter-process'], ['process', 'git-lfs filter-process --skip']];
+    for (const [k, v] of std) { G(d, 'config', `filter.lfs.${k}`, v); assert(R.safeConfig(d).ok, v); G(d, 'config', '--unset', `filter.lfs.${k}`); }
+    const evil = ['git-lfs x; echo y > m', 'git-lfs && x', 'git-lfs process $(touch m)', 'git-lfs clean -- %f; echo evil >> m', 'git-lfs clean -- %f | tee m', 'git-lfs filter-process\necho evil >> m', '/tmp/x.sh', ''];
+    for (const k of ['clean', 'smudge', 'process']) {
+      for (const v of evil) {
+        G(d, 'config', `filter.lfs.${k}`, v);
+        const r = R.safeConfig(d); assert(!r.ok && r.err.includes(`filter.lfs.${k}`), `${k}=${JSON.stringify(v)}`);
+        G(d, 'config', '--unset', `filter.lfs.${k}`);
+      }
+    }
+    assert(R.safeConfig(d).ok);
   });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
