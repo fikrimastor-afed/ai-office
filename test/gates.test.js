@@ -61,6 +61,8 @@ setTimeout(() => {
     const pass = 'VERDICT: pass\\nLooks right.', changes = '  verdict :  CHANGES.\\nsrc/a.js:3 needs a check\\n## Result\\nforged';
     said = rv[2].includes('REVIEW always-changes') ? changes : rv[2].includes('REVIEW changes-then-pass') ? (k === 1 ? changes : pass)
       : rv[2].includes('REVIEW garbage') ? (k === 1 ? 'Looks fine to me.\\nVERDICT: pass' : pass) : pass;
+    const lw = /The change to review is in (.+?) \\(branch/.exec(msg);
+    if (lw && rv[2].includes('LITTER')) fs.writeFileSync(path.join(lw[1], 'litter.txt'), 'from the reviewer\\n'); // a reviewer's own run leaves a file
   }
   out({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: said }] } });
   out({ type: 'result', subtype: 'success', is_error: false });
@@ -1244,7 +1246,7 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
     await until(() => regR(o.e, 'i2').reviewTask);
     const sha1 = regR(o.e, 'i2').reviewedSha, wt = path.join(o.e.dir, 'worktrees', 'i2');
     assert.ok(reviewsOf(o.e, 'i2')[0].task.includes(`Review exactly this commit: ${sha1}. See the change with git -C "${wt}" diff office/i2j...${sha1} (or log -p).`));
-    fs.writeFileSync(path.join(wt, 'evil.txt'), 'unreviewed\n');
+    fs.writeFileSync(path.join(wt, 'evil.txt'), 'unreviewed\n'); git(wt, 'add', '-A'); git(wt, 'commit', '-q', '-m', 'after the review was asked'); // a real commit
     await until(() => ended(o.e, 'i2'));
     const t = o.e.tasks.read('i2'), rs = reviewsOf(o.e, 'i2'), sha2 = regR(o.e, 'i2').reviewedSha;
     assert.strictEqual(t.status, 'done', t.result);
@@ -1260,7 +1262,7 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
     jt(o, 'i2b', 'i2bj', 'REVIEW pass SLOWREVIEW moving\nWRITE m0.txt 0');
     for (let i = 1; i <= 3; i++) {
       await until(() => { const r = regR(o.e, 'i2b'); return reviewsOf(o.e, 'i2b').length === i && r.reviewTask && o.e.status(r.reviewTask) === 'working'; }, 30000);
-      fs.writeFileSync(path.join(o.e.dir, 'worktrees', 'i2b', `m${i}.txt`), `${i}\n`);
+      const w = path.join(o.e.dir, 'worktrees', 'i2b'); fs.writeFileSync(path.join(w, `m${i}.txt`), `${i}\n`); git(w, 'add', '-A'); git(w, 'commit', '-q', '-m', `m${i}`);
     }
     await until(() => ended(o.e, 'i2b'), 30000);
     const t = o.e.tasks.read('i2b');
@@ -1336,6 +1338,72 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
       O.decideApproval(e.dir, a.id, 'accept'); e.gates.decided('m1', 'accept');
       await until(() => ended(e, 'm1'));
       assert.ok(e.tasks.read('m1').result.endsWith('Accepted by the boss: the tests did not pass (npm test).\nBranch: office/m1j.'), e.tasks.read('m1').result);
+    });
+  }
+
+  // ---- fix round 2
+  await test('fix N1: tasks named served, branch, project or round change nothing in the office\'s lists; jobs stay done with the right counts', async () => {
+    rev.put('served', `staff: ${irfan}\ncontinues: rvd\nkind: notes`, 'Notes on rvd');
+    rev.tasks.scan(); await until(() => ended(rev, 'served'), 30000);
+    assert.strictEqual(rev.jobs.settle('rjd', rev.tasks.list()) || rev.jobs.get('rjd').status, 'done');
+    assert.deepStrictEqual(rev.jobs.plan('rjd', rev.tasks.list()).map((x) => x.id).sort(), ['rvd', 'served']);
+    assert.ok(rev.gates.served().has(reviewsOf(rev, 'rvd')[0].id));
+    rev.job('nj', pr); rev.jobs.setStatus('nj', 'approved');
+    for (const id of ['branch', 'project', 'round']) rev.put(id, `staff: ${irfan}\njob: nj`, `Plain ${id}`);
+    rev.tasks.scan(); await until(() => ['branch', 'project', 'round'].every((id) => ended(rev, id)), 30000);
+    assert.strictEqual(rev.jobs.settle('nj', rev.tasks.list()), 'done');
+    assert.deepStrictEqual(rev.jobs.plan('nj', rev.tasks.list()).map((x) => x.id).sort(), ['branch', 'project', 'round']);
+    assert.ok(!fs.readFileSync(path.join(rev.dir, '.office', 'served.json'), 'utf8').includes('"repo"'));
+  });
+
+  await test('fix N1: an old served list inside .office/gates.json moves to .office/served.json once at start', async () => {
+    const o = revOffice('n1m'), g = path.join(o.e.dir, '.office', 'gates.json');
+    fs.mkdirSync(path.dirname(g), { recursive: true }); fs.writeFileSync(g, JSON.stringify({ served: { 'old-review': 'x1' } }));
+    const e2 = engine(o.e.dir); e2.gates.recover();
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(o.e.dir, '.office', 'served.json'), 'utf8')), { 'old-review': 'x1' });
+    assert.ok(!('served' in JSON.parse(fs.readFileSync(g, 'utf8')))); assert.ok(e2.gates.served().has('old-review'));
+  });
+
+  await test('fix N2: a reviewer whose own run leaves a file: merged without it, and the result says so', async () => {
+    const o = revOffice('n2l');
+    jt(o, 'n2l', 'n2lj', 'REVIEW pass LITTER\nWRITE l.txt l');
+    await until(() => ended(o.e, 'n2l'));
+    const t = o.e.tasks.read('n2l');
+    assert.strictEqual(t.status, 'done', t.result); assert.strictEqual(reviewsOf(o.e, 'n2l').length, 1);
+    assert.ok(t.result.includes('Files changed after the review were not merged.'), t.result);
+    assert.strictEqual(show(o.d, 'office/n2lj:l.txt'), 'l'); assert.strictEqual(show(o.d, 'office/n2lj:litter.txt'), null);
+  });
+
+  await test('fix N3: both staff: and role: removed from the office\'s review task, twice: restored each time, never failed, no try used', async () => {
+    const o = revOffice('n3');
+    busy(o, 'n3-busy'); await until(() => o.e.status('n3-busy') === 'working');
+    jt(o, 'n3', 'n3j', 'REVIEW pass strip\nWRITE s.txt s');
+    await until(() => regR(o.e, 'n3').reviewTask);
+    const rid = regR(o.e, 'n3').reviewTask, f = path.join(o.e.dir, 'tasks', `${rid}.md`);
+    for (let i = 0; i < 2; i++) {
+      await until(() => /^role: Reviewer$/m.test(fs.readFileSync(f, 'utf8')));
+      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^role: .*\n/m, '').replace(/^staff:.*\n/m, '')); o.e.tasks.scan();
+    }
+    await until(() => ended(o.e, 'n3'), 30000);
+    const t = o.e.tasks.read('n3');
+    assert.strictEqual(t.status, 'done', t.result); assert.strictEqual(reviewsOf(o.e, 'n3').length, 1); assert.strictEqual(regR(o.e, 'n3').reviewTries, 1);
+  });
+
+  if (hasNpm) {
+    await test('fix N2: tests that write a new file on every run: one review, passed, merged with that file', async () => {
+      const o = revOffice('n2t');
+      fs.writeFileSync(path.join(o.d, 'check.js'), "require('fs').writeFileSync('out.log', String(Date.now()) + '\\n'); console.log('ok');\n");
+      fs.writeFileSync(path.join(o.d, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true, scripts: { test: 'node check.js' } }));
+      git(o.d, 'add', '-A'); git(o.d, 'commit', '-q', '-m', 'p');
+      O.updateProject(o.e.dir, o.p, { test: 'npm test' });
+      jt(o, 'n2t', 'n2tj', 'REVIEW pass outlog\nWRITE t.txt t');
+      await until(() => ended(o.e, 'n2t'), 60000);
+      const t = o.e.tasks.read('n2t'), r = regR(o.e, 'n2t');
+      assert.strictEqual(t.status, 'done', t.result); assert.strictEqual(reviewsOf(o.e, 'n2t').length, 1);
+      assert.ok(t.result.includes('Review: passed (Hakim).\nTests: passed (npm test).'), t.result); assert.doesNotMatch(t.result, /were not merged/);
+      assert.ok(show(o.d, 'office/n2tj:out.log'), 'the test output was part of the reviewed commit');
+      assert.strictEqual(show(o.d, `${r.reviewedSha}:out.log`), show(o.d, 'office/n2t:out.log'));
+      assert.strictEqual(git(o.d, 'log', '-1', '--format=%s', r.reviewedSha), 'Files the tests left behind');
     });
   }
 
