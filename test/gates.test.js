@@ -3,6 +3,7 @@
 //   WRITE <file> <text>   write and commit that file in the worktree named in the prompt
 //   LEAVE <file> <text>   write it without committing
 //   STUBBORN              the session never fixes a merge conflict
+//   NOCOMMIT              the session resolves a merge conflict but leaves it staged, not committed
 //   LONG                  takes longer
 //   SWITCH <branch>       switches the worktree to a new branch
 //   SWAP <folder>         replaces the worktree with a link to that folder and writes x.txt there
@@ -30,7 +31,7 @@ const msg = a[a.indexOf('-p') + 1];
 fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, msg, cwd: process.cwd(), at: Date.now() }) + '\\n');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const resume = a.includes('--resume') ? a[a.indexOf('--resume') + 1] : '';
-const sid = resume || (msg.includes('STUBBORN') ? 'stubborn-' : msg.includes('SLOWFIX') ? 'slowfix-' : 'sess-') + Date.now() + '-' + process.pid;
+const sid = resume || (msg.includes('STUBBORN') ? 'stubborn-' : msg.includes('SLOWFIX') ? 'slowfix-' : msg.includes('NOCOMMIT') ? 'nocommit-' : 'sess-') + Date.now() + '-' + process.pid;
 out({ type: 'system', subtype: 'init', session_id: sid });
 const m = /Work only in (.+?)\\. It is its own copy/.exec(msg), wt = m ? m[1] : '';
 const g = (...x) => spawnSync('git', ['-C', wt, ...x], { encoding: 'utf8' });
@@ -50,7 +51,7 @@ setTimeout(() => {
     if (mm && !sid.startsWith('stubborn')) {
       if (g('merge', '--no-edit', mm[1]).status !== 0) {
         for (const f of g('diff', '--name-only', '--diff-filter=U').stdout.split('\\n').filter(Boolean)) fs.writeFileSync(path.join(wt, f), 'resolved\\n');
-        g('add', '-A'); g('commit', '--no-edit');
+        g('add', '-A'); if (!sid.startsWith('nocommit')) g('commit', '--no-edit'); // NOCOMMIT: the resolution is left staged
       }
     }
   }
@@ -1406,6 +1407,53 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
       assert.strictEqual(git(o.d, 'log', '-1', '--format=%s', r.reviewedSha), 'Files the tests left behind');
     });
   }
+
+  // ---- fix round 3: a reviewed task whose merge conflicts
+  // A hang here starves the event loop (no timer fires): a worker thread kills the run instead of blocking the suite.
+  const watchdog = (ms, label) => {
+    const { Worker } = require('worker_threads'), sab = new SharedArrayBuffer(4), flag = new Int32Array(sab);
+    const w = new Worker("const { workerData: d } = require('worker_threads'); if (Atomics.wait(new Int32Array(d.sab), 0, 0, d.ms) === 'timed-out') { require('fs').writeSync(2, 'hang: ' + d.label + '\\n'); process.kill(process.pid, 'SIGKILL'); }", { eval: true, workerData: { sab, ms, label } });
+    return () => { Atomics.store(flag, 0, 1); Atomics.notify(flag, 0); w.unref(); };
+  };
+  const conflictOn = (o, job, text) => { // a commit on the job's branch that touches a.txt
+    const tw = path.join(tmp, `${job}-side`); git(o.d, 'worktree', 'add', '-q', tw, `office/${job}`);
+    fs.writeFileSync(path.join(tw, 'a.txt'), `${text}\n`); git(tw, 'commit', '-q', '-am', 'job change'); git(o.d, 'worktree', 'remove', tw);
+  };
+  const conflictCase = async (name, title) => {
+    const o = revOffice(name);
+    busy(o, `${name}-busy`); await until(() => o.e.status(`${name}-busy`) === 'working');
+    jt(o, name, `${name}j`, `${title}\nWRITE a.txt from the task`);
+    await until(() => regR(o.e, name).reviewTask);
+    conflictOn(o, `${name}j`, 'from the job');
+    const ok = watchdog(90000, name);
+    await until(() => ended(o.e, name), 80000); ok();
+    return o;
+  };
+
+  await test('fix R1: a reviewed task whose merge conflicts: the author commits the fix, it is reviewed again and merged (no hang)', async () => {
+    const o = await conflictCase('r1', 'REVIEW pass conflict');
+    const t = o.e.tasks.read('r1'), r = regR(o.e, 'r1');
+    assert.strictEqual(t.status, 'done', t.result);
+    assert.strictEqual(fixesOf(o.e, 'r1').length, 1); assert.strictEqual(reviewsOf(o.e, 'r1').length, 2, 'reviewed again on the fix');
+    assert.strictEqual(git(o.d, 'rev-parse', 'office/r1'), r.reviewedSha);
+    assert.strictEqual(show(o.d, 'office/r1j:a.txt'), 'resolved');
+    assert.strictEqual(o.e.jobs.settle('r1j', o.e.tasks.list()), 'done');
+  });
+
+  await test('fix R2: the author leaves the conflict fix uncommitted: the office commits it, it is reviewed and merged', async () => {
+    const o = await conflictCase('r2', 'REVIEW pass NOCOMMIT conflict');
+    const t = o.e.tasks.read('r2'), r = regR(o.e, 'r2');
+    assert.strictEqual(t.status, 'done', t.result); assert.doesNotMatch(t.result, /were not merged/);
+    assert.strictEqual(reviewsOf(o.e, 'r2').length, 2);
+    assert.strictEqual(show(o.d, `${r.reviewedSha}:a.txt`), 'resolved'); assert.strictEqual(show(o.d, 'office/r2j:a.txt'), 'resolved');
+  });
+
+  await test('fix R3: a conflict that is never fixed ends in a plain failure, no hang', async () => {
+    const o = await conflictCase('r3', 'REVIEW pass STUBBORN conflict');
+    const t = o.e.tasks.read('r3');
+    assert.strictEqual(t.status, 'failed'); assert.ok(t.result.endsWith('The branch office/r3 still does not merge into office/r3j. Files: a.txt.'), t.result);
+    assert.strictEqual(show(o.d, 'office/r3j:a.txt'), 'from the job');
+  });
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} gates tests passed`);
