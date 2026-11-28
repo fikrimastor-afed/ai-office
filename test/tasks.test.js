@@ -43,6 +43,8 @@ const tasks = new Tasks(dir, {
   onStart: (t) => started.push(t.id), onEnd: (t, r) => ended.push([t.id, t.status, r]),
 });
 const put = (id, staff, text) => fs.writeFileSync(path.join(dir, 'tasks', `${id}.md`), `---\nstaff: ${staff}\nproject:\nstatus: new\n---\n${text}\n`);
+const putH = (id, head, text) => fs.writeFileSync(path.join(dir, 'tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+const endedOf = (id) => ended.find((e) => e[0] === id);
 const until = (fn, ms = 15000) => new Promise((res, rej) => { const t0 = Date.now(); const t = setInterval(() => { if (fn()) { clearInterval(t); res(); } else if (Date.now() - t0 > ms) { clearInterval(t); rej(new Error('timeout')); } }, 50); });
 const calls = () => fs.readFileSync(path.join(tmp, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
 let n = 0;
@@ -132,6 +134,71 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     put('t9', 'siti', 'also cut'); fs.writeFileSync(path.join(dir, 'tasks', 't9.md'), fs.readFileSync(path.join(dir, 'tasks', 't9.md'), 'utf8').replace('status: new', 'status: working'));
     tasks.recover(); tasks.dismiss('t9');
     assert.deepStrictEqual(tasks.interrupted(), []);
+  });
+
+  await test('a task waits for the tasks it needs, then starts on its own', async () => {
+    putH('n1', 'staff: siti', 'LONG first part');
+    putH('n2', 'staff: nurul\nneeds: n1', 'second part');
+    tasks.scan();
+    await until(() => tasks.active().some((a) => a.id === 'n1'));
+    assert.strictEqual(tasks.read('n2').status, 'new');
+    assert.deepStrictEqual(tasks.board().waiting.map((w) => [w.id, w.waitingFor]), [['n2', ['n1']]]);
+    await until(() => endedOf('n2'));
+    assert.strictEqual(tasks.read('n2').status, 'done');
+    assert.ok(tasks.read('n2').started >= tasks.read('n1').finished);
+  });
+
+  await test('needs can be written loosely', async () => {
+    putH('n3', 'staff: siti\nneeds: n1,n2   # both first', 'x');
+    fs.writeFileSync(path.join(dir, 'tasks', 'n4.md'), '---\r\nstaff: siti\r\nneeds: n1 n2\r\nstatus: new\r\n---\r\ny\r\n');
+    assert.deepStrictEqual(tasks.needsOf(tasks.read('n3')), ['n1', 'n2']);
+    assert.deepStrictEqual(tasks.needsOf(tasks.read('n4')), ['n1', 'n2']);
+    tasks.scan(); await until(() => endedOf('n3') && endedOf('n4'));
+  });
+
+  await test('a need that does not exist, or a circle, fails with a plain reason', async () => {
+    putH('n5', 'staff: siti\nneeds: nope', 'x');
+    putH('n6', 'staff: siti\nneeds: n7', 'x'); putH('n7', 'staff: nurul\nneeds: n6', 'y');
+    putH('n8', 'staff: siti\nneeds: n8', 'x');
+    tasks.scan();
+    assert.strictEqual(tasks.read('n5').result, 'Task "nope" in needs does not exist.');
+    assert.match(tasks.read('n6').result, /^These tasks need each other in a circle: /);
+    assert.strictEqual(tasks.read('n7').status, 'failed');
+    assert.strictEqual(tasks.read('n8').result, 'A task cannot need itself.');
+  });
+
+  await test('when a needed task fails or is stopped, the rest keeps waiting and the office is told once; a rerun unblocks it', async () => {
+    const blocked = []; tasks.h.onBlocked = (t, ids) => blocked.push([t.id, ids]);
+    putH('n9', 'staff: siti', 'LONG will be stopped');
+    putH('n10', 'staff: nurul\nneeds: n9', 'after');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'n9'));
+    tasks.stop('n9'); await until(() => tasks.read('n9').status === 'stopped');
+    tasks.scan(); tasks.scan();
+    assert.deepStrictEqual(blocked, [['n10', ['n9']]]);
+    assert.deepStrictEqual(tasks.board().waiting[0].blockedBy, ['n9']);
+    tasks.rerun('n9');
+    await until(() => endedOf('n10'), 20000);
+    assert.strictEqual(tasks.read('n10').status, 'done');
+  });
+
+  await test('a waiting task can be cancelled, survives a restart, and fails plainly if its need is deleted', async () => {
+    putH('n11', 'staff: siti', 'LONG base'); putH('n12', 'staff: nurul\nneeds: n11', 'a'); putH('n13', 'staff: nurul\nneeds: n11', 'b');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'n11'));
+    assert.deepStrictEqual(tasks.stop('n12'), { ok: true });
+    assert.strictEqual(tasks.read('n12').result, 'Cancelled by the boss before it started.');
+    await until(() => endedOf('n13'));                       // n13 ran after n11
+    putH('n14', 'staff: siti', 'LONG base 2'); putH('n15', 'staff: nurul\nneeds: n14', 'c');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'n14'));
+    fs.unlinkSync(path.join(dir, 'tasks', 'n14.md')); tasks.stopAll();
+    await until(() => tasks.active().length === 0);
+    const again = new Tasks(dir, tasks.h); again.scan();     // "restart": a fresh engine over the same files
+    assert.strictEqual(again.read('n15').result, 'Task "n14" in needs does not exist.');
+    // a waiting task whose need finished while the office was off starts after the restart
+    fs.writeFileSync(path.join(dir, 'tasks', 'n16.md'), '---\nstaff: siti\nstatus: done\n---\nbase 3\n\n## Result\n\nok\n');
+    putH('n17', 'staff: nurul\nneeds: n16', 'd');
+    new Tasks(dir, tasks.h).scan();
+    await until(() => endedOf('n17'));
+    assert.strictEqual(tasks.read('n17').status, 'done');
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
