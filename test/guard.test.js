@@ -405,4 +405,20 @@ test('final 11: in a dashboard run the run\'s own marker says who is asking, wha
   assert.strictEqual(as('git status', 'shah', '/home/ali/office/staff/wei').decision, 'allow');
 });
 
+test('final R: inline code after an on/off flag, python2 -Q, git reset --ha, npm x', () => {
+  const wei = (c) => run(c, { agent: 'wei' }).decision;
+  for (const c of ['node --no-warnings -e 1', 'node --trace-warnings -e "1"', 'node --inspect -e 1', 'node --enable-source-maps -p 1', 'node --experimental-vm-modules -e 1', 'ruby --disable-gems -e 1',
+    'python -W ignore -c "1"', 'python -X dev -c "1"', 'python2 -Q new -c 1', 'npm x cowsay', 'npm exe cowsay']) assert.strictEqual(wei(c), 'deny', c);
+  for (const c of ['node --require dotenv/config app.js -c cfg.yml', 'node --env-file .env app.js -e prod', 'python -X dev script.py -c cfg.yml', 'python -W ignore -m pytest -rA', 'npm install', 'npm run build', 'npm explain lodash'])
+    assert.strictEqual(wei(c), null, c);
+  assert.strictEqual(run('npm x cowsay', { agent: 'wei' }).reason, 'Run the command itself, not through npm x.');
+  for (const who of ['shah', 'wei', 'priya']) for (const c of ['git reset --ha', 'git reset --har', 'git reset HEAD~1 --ha']) {
+    const r = run(c, { agent: who });
+    assert.strictEqual(r.decision, 'deny', `${who}: ${c}`); assert.match(r.reason, /^"git reset --hard" is never run/, `${who}: ${c}`);
+  }
+  for (const [c, shah, wei2, priya] of [['git reset --soft HEAD~1', 'deny', null, null], ['git reset HEAD file.js', 'deny', null, null]]) {
+    assert.strictEqual(run(c, { agent: 'shah' }).decision, shah, c); assert.strictEqual(wei(c), wei2, c); assert.strictEqual(run(c, { agent: 'priya' }).decision, priya, c);
+  }
+});
+
 console.log(`\n${n} guard tests passed`);

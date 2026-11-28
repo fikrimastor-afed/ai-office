@@ -73,9 +73,9 @@ function flagRefusal(w) {
 }
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
-// The never-list entry a command's words match, or ''. Also git reset with --hard anywhere, and git checkout . (every file).
+// The never-list entry a command's words match, or ''. Also git reset with --hard (or --ha...) anywhere, and git checkout . (every file).
 const never = (w) => (ALWAYS_DENY.find((d) => starts(w.join(' '), d.trim())) || '').trim()
-  || (w[0] === 'git' && w[1] === 'reset' && w.includes('--hard') ? 'git reset --hard' : '')
+  || (w[0] === 'git' && w[1] === 'reset' && w.some((x) => x.startsWith('--ha')) ? 'git reset --hard' : '') // git reads --ha as --hard
   || (w[0] === 'git' && w[1] === 'checkout' && w.slice(2).filter((x) => x !== '--').join(' ') === '.' ? 'git checkout .' : '');
 
 // Turn a path as Claude writes it (quotes, Git Bash /c/..., ~) into a real absolute path.
@@ -110,23 +110,24 @@ function splitCommand(cmd) {
 const programName = (x) => x.replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
 const words = (p) => { const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); w[0] = programName(w[0]); return w; };
 // Wrappers and shells: with these a command can hide another one (an Auto staff has no list to catch them).
-const WRAPPERS = ['npx', 'npm exec', 'bunx', 'env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
+const WRAPPERS = ['npx', 'bunx', 'env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
 const INTERPRETERS = ['node', 'python', 'python2', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'lua'];
 const PLAIN = /^[A-Za-z0-9_.+-]+$/; // a program name, or one folder name in a path
 const NEVER_PROGRAMS = [...new Set(ALWAYS_DENY.map((d) => d.trim().split(' ')[0]))]; // git, rm, curl, ...: run by name only
-// Letters that take a value in an interpreter's flags: joined (ruby -Itest) or as the next word (python -W ignore).
-const VALUED = { python: 'WX', python2: 'WX', python3: 'WX', ruby: 'ICFK', perl: 'IMmx', php: 'dfztS', node: 'C', lua: 'l' };
+// Flags that take a value: letters, joined (ruby -Itest) or as the next word (python -W ignore); node's long ones as the next word.
+const VALUED = { python: 'WX', python2: 'WXQ', python3: 'WX', ruby: 'ICFK', perl: 'IMmx', php: 'dfztS', node: 'C', lua: 'l' };
+const VALUED_LONG = ['--require', '--conditions', '--input-type', '--import', '--loader', '--experimental-loader', '--env-file', '--max-old-space-size', '--title'];
 // Code on the command line: a code flag among the interpreter's own flags, the words before the script or
-// subcommand (python -m runs a module: the rest is the module's). A long flag without = may take the next word.
+// subcommand (python -m runs a module: the rest is the module's). A value is never a word that starts with -.
 function inlineCode(first, args) {
   for (let k = 0; k < args.length; k++) {
-    const x = args[k];
+    const x = args[k], skip = () => { if (!/^-/.test(args[k + 1] || '-')) k++; };
     if (!/^-./.test(x) || (/^python/.test(first) && /^-m/.test(x))) return false;
     if (/^--(eval|print|command)(=|$)/.test(x)) return true;
-    if (/^--./.test(x)) { if (!x.includes('=')) k++; continue; }
+    if (/^--./.test(x)) { if (VALUED_LONG.includes(x)) skip(); continue; }
     for (let j = 1; j < x.length; j++) {
       if ('ecrpE'.includes(x[j])) return true;
-      if ((VALUED[first] || '').includes(x[j])) { if (j === x.length - 1) k++; break; }
+      if ((VALUED[first] || '').includes(x[j])) { if (j === x.length - 1) skip(); break; }
     }
   }
   return false;
@@ -147,7 +148,7 @@ function autoRefusal(p, w, win) {
     if (f) return f;
   } else if (!PLAIN.test(prog)) return 'Run one plain command: start with the program\'s name.'; // no NAME=value, ( or ! first
   // no wrapper or shell: it can hide another command
-  const wrap = WRAPPERS.find((x) => starts([first, ...args].join(' '), x));
+  const wrap = first === 'npm' && ['x', 'exe', 'exec'].includes(args[0]) ? `npm ${args[0]}` : WRAPPERS.find((x) => starts([first, ...args].join(' '), x)); // npm x and npm exe are npm exec
   if (wrap) return `Run the command itself, not through ${wrap}.`;
   // no code on the command line (node --import data:, deno eval, python -c, ...)
   const data = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
