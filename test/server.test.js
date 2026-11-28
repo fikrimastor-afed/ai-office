@@ -209,6 +209,13 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       assert.strictEqual((await req('PUT', '/api/manager', { model: 'fable', effort: 'high' })).status, 200);
       run = (await req('GET', '/api/run')).body;
       assert.deepStrictEqual(run.people.pa, { model: 'fable', effort: 'high' });
+      assert.strictEqual(JSON.parse(read('office.json')).pa.commands, undefined, 'nothing ticked: no commands key');
+      assert.strictEqual((await req('PUT', '/api/manager', { commands: ['github', 'git'] })).status, 200);
+      assert.deepStrictEqual(JSON.parse(read('office.json')).pa.commands, ['github']);
+      assert.strictEqual((await req('PUT', '/api/manager', { model: 'fable' })).status, 200);
+      assert.deepStrictEqual(JSON.parse(read('office.json')).pa.commands, ['github'], 'a model change keeps it');
+      assert.strictEqual((await req('PUT', '/api/manager', { commands: [] })).status, 200);
+      assert.strictEqual(JSON.parse(read('office.json')).pa.commands, undefined);
       assert.deepStrictEqual(run.people.aina, { model: 'haiku', effort: 'low' });
       assert.deepStrictEqual(T.runFlags(JSON.parse(read('office.json')), 'aina'), ['--model', 'haiku', '--effort', 'low']);
       await req('PUT', '/api/staff/aina', { model: 'default', effort: 'default' });

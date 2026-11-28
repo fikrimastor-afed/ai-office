@@ -358,9 +358,9 @@ function renderStaffForm() {
       <div class="pb pre">${esc(pa().name)} is your ${mgrName().toLowerCase()}. Every task goes through ${esc(pa().name)}, who hands it to the right staff, checks the result and reports back to you.
 
 ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in the office folder. The team table in it updates by itself when you add, edit or archive staff.</div>
-      <div class="pb form" id="pf">${runFields('pa')}</div>
+      <div class="pb form" id="pf">${runFields('pa')}${(S.presets || []).filter((x) => x.id === 'github').map((x) => `<label class="lbl" style="margin-top:12px">Commands</label><div class="cmdgrid"><label class="cmd"><input type="checkbox" name="mcmd" value="${esc(x.id)}" ${(pa().commands || []).includes(x.id) ? 'checked' : ''}><span><b>${esc(x.label)}</b><br><span class="faint">${esc(x.about)}</span></span></label></div>`).join('')}</div>
       <div class="formfoot"><button class="btn pri" id="pSave">${icon('save')}Save</button></div>`;
-    $('#pSave').onclick = () => act(() => api('manager', 'PUT', { model: $('[name=model]', f).value, effort: $('[name=effort]', f).value }), 'Saved')
+    $('#pSave').onclick = () => act(() => api('manager', 'PUT', { model: $('[name=model]', f).value, effort: $('[name=effort]', f).value, commands: $$('[name=mcmd]:checked', f).map((x) => x.value) }), 'Saved')
       .then(async () => { S.run = await api('run'); renderStaffForm(); });
   } else {
     const s = S.staff.find((x) => x.id === id);

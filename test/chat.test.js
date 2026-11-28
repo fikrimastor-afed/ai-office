@@ -188,6 +188,23 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.ok(!calls().pop().args.includes('--resume'), 'fresh start');
   });
 
+  await test('the manager gets Bash and the GitHub note only when GitHub is ticked', async () => {
+    const f = path.join(dir, 'office.json');
+    const cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const tools = () => { const c = calls().pop(); return [c.args[c.args.indexOf('--tools') + 1], c.args[c.args.indexOf('--append-system-prompt') + 1]]; };
+    chats.send('pa', 'any issue?'); await idle('pa');
+    let [t, note] = tools();
+    assert.ok(!t.includes('Bash')); assert.ok(!/gh issue view/.test(note));
+    cfg.pa.commands = ['github', 'git']; fs.writeFileSync(f, JSON.stringify(cfg));
+    chats.send('pa', 'look up issue 12'); await idle('pa');
+    [t, note] = tools();
+    assert.ok(t.split(',').includes('Bash')); assert.match(note, /gh issue view 12 --repo owner\/name/); assert.match(note, /hand command work to them/i);
+    cfg.pa.commands = ['git']; fs.writeFileSync(f, JSON.stringify(cfg));
+    chats.send('pa', 'again'); await idle('pa');
+    assert.ok(!tools()[0].includes('Bash'), 'only github counts');
+    delete cfg.pa.commands; fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} chat tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

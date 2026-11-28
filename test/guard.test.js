@@ -172,4 +172,18 @@ test('the flag check sees through quotes, backslashes and double dashes', () => 
   for (const c of ['go test ./... -run TestExec', 'go test ./exec/...', 'cargo test config_loads', 'pytest tests/test_basetemp.py', 'pytest -k "exec or config"']) allow(c, o);
 });
 
+test('the manager: no commands unless GitHub is ticked, then only GitHub look-ups', () => {
+  const asPa = (command, off) => decide({ tool_name: 'Bash', tool_input: { command }, cwd: off.dir }, off, { chat: true, win: false });
+  assert.strictEqual(asPa('gh issue view 12', office).decision, 'deny');
+  assert.ok(/does not run commands/.test(asPa('gh issue view 12', office).reason), 'nothing ticked: today\'s text');
+  const withGh = { ...office, pa: { name: 'Hana', commands: ['github', 'git'] } };   // 'git' must be ignored
+  assert.strictEqual(asPa('gh issue view 12 --repo acme/shop', withGh).decision, 'allow');
+  assert.strictEqual(asPa('gh project item-list 3 --owner acme', withGh).decision, 'allow');
+  for (const c of ['gh pr merge 5', 'gh issue comment 12 -b x', 'gh api repos/acme/shop', 'gh issue view 12 && rm -rf x', 'git status', 'npm test', 'node x.cjs'])
+    assert.strictEqual(asPa(c, withGh).decision, 'deny', c);
+  assert.match(asPa('git status', withGh).reason, /can only look things up on GitHub/);
+  const onlyGit = { ...office, pa: { name: 'Hana', commands: ['git'] } };
+  assert.ok(/does not run commands/.test(asPa('git status', onlyGit).reason), 'a value other than github is ignored');
+});
+
 console.log(`\n${n} guard tests passed`);

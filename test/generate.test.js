@@ -217,5 +217,14 @@ test('instructions: business text frozen, software text written for software wor
   assert.doesNotMatch(pa + eng + ag, /[\u2013\u2014]/);
 });
 
+test('the manager: a software office starts with GitHub look-ups, a business office with none', () => {
+  assert.deepStrictEqual(softwareCfg.pa.commands, ['github']);
+  assert.deepStrictEqual(JSON.parse(T.officeJson(softwareCfg)).pa.commands, ['github']);
+  assert.ok(!('commands' in businessCfg.pa));
+  assert.ok(!('commands' in JSON.parse(T.officeJson(businessCfg)).pa));
+  const odd = { ...softwareCfg, pa: { ...softwareCfg.pa, commands: ['git', 'github'] } };
+  assert.deepStrictEqual(JSON.parse(T.officeJson(odd)).pa.commands, ['github']);
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);

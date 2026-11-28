@@ -29,6 +29,9 @@ const PRESETS = {
 };
 // A staff's presets: "docs" is on unless the boss turned it off (docs: false in office.json).
 const cmdsOf = (s) => [...(s && s.docs === false ? [] : ['docs']), ...((s && s.commands) || []).filter((k) => k !== 'docs')];
+// The manager may be given these presets only (office.json pa.commands); anything else there is ignored.
+const MANAGER_PRESETS = ['github'];
+const managerCmds = (pa) => ((pa && pa.commands) || []).filter((k) => MANAGER_PRESETS.includes(k));
 // Never, whatever is ticked: these lose work, publish, or open a door. The boss runs them.
 const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 'git filter-branch', 'git branch -D', 'git checkout --', 'git restore .',
   'php artisan migrate:fresh', 'php artisan migrate:reset', 'php artisan migrate:refresh', 'php artisan db:wipe', 'php artisan tinker', 'php artisan down',
@@ -92,8 +95,9 @@ function decide(input, office, opts = {}) {
     const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && /^-/.test(x) && x.replace(/^-+/, '').split('=')[0] === d.replace(/^-+/, '')));
     if (f) return opts.chat ? { decision: 'deny', reason: `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
   }
-  if (!staff) return no(`${name} does not run commands. Hand it to a staff who has commands turned on (Staff page).`);
-  const allowed = [...cmdsOf(staff).flatMap((k) => (PRESETS[k] ? PRESETS[k].allow : [])), ...(staff.customCommands || [])];
+  const mgr = managerCmds(office.pa);
+  if (!staff && !mgr.length) return no(`${name} does not run commands. Hand it to a staff who has commands turned on (Staff page).`);
+  const allowed = staff ? [...cmdsOf(staff).flatMap((k) => (PRESETS[k] ? PRESETS[k].allow : [])), ...(staff.customCommands || [])] : mgr.flatMap((k) => PRESETS[k].allow);
   if (!allowed.length) return no(`${name} has no commands turned on. The boss can tick them on the Staff page.`);
 
   const norm = (d) => (win ? P.resolve(d).toLowerCase() : P.resolve(d)); // Windows paths ignore case
@@ -116,7 +120,7 @@ function decide(input, office, opts = {}) {
       p = `git ${rest}`;
       for (const d of ALWAYS_DENY) if (starts(p, d.trim())) return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
     }
-    if (!allowed.some((a) => starts(p, a))) return no(`"${p.split(/\s+/).slice(0, 3).join(' ')}" is not on ${name}'s allowed commands. The boss can add it on the Staff page.`);
+    if (!allowed.some((a) => starts(p, a))) return no(!staff ? 'The manager can only look things up on GitHub (gh issue view, gh pr view and similar). Hand other command work to a staff.' : `"${p.split(/\s+/).slice(0, 3).join(' ')}" is not on ${name}'s allowed commands. The boss can add it on the Staff page.`);
     // Office documents: node only on a script file saved in the office or a linked folder (no -e, no outside scripts)
     if (starts(p, 'node') && !(staff.customCommands || []).some((c) => starts(p, c))) {
       const [file] = firstWord(p.slice(4).trim());
@@ -174,7 +178,7 @@ function useGrant(dir, id, when = new Date().toISOString()) {
   } catch { /* approval file gone: the grant is what counts */ }
 }
 
-module.exports = { PRESETS, ALWAYS_DENY, ASK_FIRST, cmdsOf, decide, decideAction, sameInput };
+module.exports = { PRESETS, MANAGER_PRESETS, managerCmds, ALWAYS_DENY, ASK_FIRST, cmdsOf, decide, decideAction, sameInput };
 
 if (require.main === module) {
   let raw = '';
