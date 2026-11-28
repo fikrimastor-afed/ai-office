@@ -15,7 +15,7 @@ const msg = a[a.indexOf('-p') + 1];
 fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, cwd: process.cwd(), at: Date.now() }) + '\\n');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const wait = msg.includes('LONG') ? 2500 : 400;
-const sid = a.includes('--resume') ? a[a.indexOf('--resume') + 1] : 'sess-' + Date.now() + '-' + process.pid;
+const sid = msg.includes('BADSID') ? '--evil' : a.includes('--resume') ? a[a.indexOf('--resume') + 1] : 'sess-' + Date.now() + '-' + process.pid;
 out({ type: 'system', subtype: 'init', session_id: sid });
 setTimeout(() => {
   out({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'Done: ' + msg.split('\\n')[2] }] } });
@@ -302,6 +302,66 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     clearInterval(watch); assert.strictEqual(most, 1);
     assert.ok(tasks.read('p2').started >= tasks.read('p1').finished);
     fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
+  await test('hand-written tasks (no created) start in the order they were written, not by id', async () => {
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(f, JSON.stringify({ ...cfg, maxParallel: 1 }));
+    putH('o-busy', 'staff: siti', 'LONG busy');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'o-busy'));
+    putH('z-first', 'staff: nurul', 'written first'); putH('a-second', 'staff: aina', 'written second');
+    const now = Date.now() / 1000, tf = (id) => path.join(dir, 'tasks', `${id}.md`);
+    fs.utimesSync(tf('z-first'), now - 2, now - 2); fs.utimesSync(tf('a-second'), now - 1, now - 1);
+    tasks.scan();
+    await until(() => endedOf('z-first') && endedOf('a-second'), 20000);
+    assert.ok(tasks.read('z-first').started < tasks.read('a-second').started, 'z-first ran first');
+    assert.ok(!fs.readFileSync(tf('a-second'), 'utf8').includes('created:'), 'created is not written into the file');
+    fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
+  await test('a task that cannot even start fails once; the others start exactly once', async () => {
+    putH('e1', 'staff: siti\ncreated: 2001-01-01T00:00:00.000Z', 'bad \0 text');
+    putH('e2', 'staff: nurul\ncreated: 2001-01-01T00:00:01.000Z', 'second ok');
+    putH('e3', 'staff: aina\ncreated: 2001-01-01T00:00:02.000Z', 'third ok');
+    tasks.scan();
+    await until(() => endedOf('e1') && endedOf('e2') && endedOf('e3'));
+    await new Promise((r) => setTimeout(r, 900)); // a second run would end by now
+    for (const id of ['e1', 'e2', 'e3']) assert.strictEqual(ended.filter((e) => e[0] === id).length, 1, `${id} ended once`);
+    for (const id of ['e2', 'e3']) assert.strictEqual(calls().filter((x) => x.args[x.args.indexOf('-p') + 1].includes(`(task ${id})`)).length, 1, `${id} spawned once`);
+    assert.strictEqual(tasks.read('e1').status, 'failed'); assert.match(tasks.read('e1').result, /^Could not start Claude Code/);
+    assert.deepStrictEqual(tasks.active(), []);
+  });
+
+  await test('a hand-written session that is not a session id is never passed to Claude', async () => {
+    fs.writeFileSync(path.join(dir, 'tasks', 's1.md'), '---\nstaff: aina\nstatus: done\nsession: --some-flag\n---\nold\n\n## Result\n\nok\n');
+    putH('s2', 'continues: s1', 'more please');
+    putH('s3', 'staff: siti', 'BADSID run');
+    tasks.scan(); await until(() => endedOf('s2') && endedOf('s3'));
+    const c = calls().find((x) => x.args[x.args.indexOf('-p') + 1].includes('task s2'));
+    assert.ok(!c.args.includes('--resume') && !c.args.includes('--some-flag'));
+    assert.match(c.args[c.args.indexOf('-p') + 1], /You have no memory of task s1: read .*s1\.md first\./);
+    assert.strictEqual(tasks.read('s3').session, undefined, 'a bad session id from Claude is not written');
+  });
+
+  await test('run again keeps continues, job and kind', async () => {
+    fs.writeFileSync(path.join(dir, 'tasks', 'g1.md'), '---\nstaff: nurul\ncontinues: f1\njob: j-7\nkind: invoice\nstatus: failed\n---\nRedo the total\n\n## Result\n\nbroke\n');
+    const r = tasks.rerun('g1'), t = tasks.read(r.id);
+    assert.deepStrictEqual([t.continues, t.job, t.kind, t.again, t.staff], ['f1', 'j-7', 'invoice', 'g1', 'nurul']);
+    await until(() => endedOf(r.id));
+    assert.strictEqual(tasks.read(r.id).status, 'done');
+  });
+
+  await test('a role task never goes to the staff who asked for it', async () => {
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.map((s) => (s.id === 'nurul' ? { ...s, role: 'Sales' } : s)) }));
+    putH('h1', 'role: Sales\nfrom: siti', 'Check my quote');
+    tasks.scan(); await until(() => endedOf('h1'));
+    assert.strictEqual(tasks.read('h1').staff, 'nurul');
+    fs.writeFileSync(f, JSON.stringify(cfg));
+    putH('h2', 'role: Sales\nfrom: siti', 'Only I am Sales');
+    tasks.scan(); await until(() => endedOf('h2'));
+    assert.strictEqual(tasks.read('h2').status, 'failed');
+    assert.strictEqual(tasks.read('h2').result, 'Only the one who asked has the role "Sales", and a staff cannot give a task to themselves.');
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
