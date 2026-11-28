@@ -450,6 +450,80 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         assert.strictEqual(fresh2.filter((m) => m.includes('your request m1')).length, 1, 'the asking staff is told as before');
       } finally { await srv4.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
     });
+    await test('plan approval: one per planned job, decided through the route only; forged files and the public route carry no kind', async () => {
+      const dir5 = path.join(tmp, 'office5'); const cfg5 = G.buildConfig({ company: 'Five', pa: 'Hana', staff: D.STAFF.slice(0, 3).map(({ name, role, job }) => ({ name, role, job })) }); G.writeOffice(dir5, cfg5);
+      const req5 = (m, u, b) => req(m, u, b, { 'x-office-key': cfg5.key });
+      const srv5 = createServer(dir5), p0 = port; port = await srv5.listen(0);
+      const until = async (fn, n = 100) => { for (let i = 0; i < n; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const prompts = () => fs.readFileSync(callLog, 'utf8').trim().split('\n').map(JSON.parse);
+      const w = (...p) => path.join(dir5, ...p), reg = () => JSON.parse(fs.readFileSync(w('.office', 'jobs.json'), 'utf8'));
+      const mkjob = (id, title) => fs.writeFileSync(w('jobs', `${id}.md`), `---\nproject: shop\n---\n${title}\n\nThe plan\n`);
+      const mk = (id, head, text) => fs.writeFileSync(w('tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+      const plans = async () => (await req5('GET', '/api/approvals')).body.filter((a) => a.kind === 'plan');
+      const jobOf = async (id) => (await req5('GET', '/api/jobs')).body.find((j) => j.id === id);
+      const status = async (id) => (await req5('GET', '/api/tasks')).body.list.find((t) => t.id === id);
+      try {
+        mkjob('p1', 'Shop page'); mk('t1', 'staff: siti\njob: p1', 'Build the page\nwith more lines'); mk('t2', 'staff: nurul\njob: p1\nneeds: t1', 'Test the page');
+        await until(async () => (await plans()).length === 1);
+        await new Promise((r) => setTimeout(r, 600));
+        const [a] = await plans();
+        assert.strictEqual((await plans()).length, 1, 'exactly one plan approval');
+        assert.strictEqual(a.action, 'Start the job "Shop page"'); assert.strictEqual(a.ref, 'p1'); assert.strictEqual(a.status, 'pending');
+        assert.ok(a.details.includes('Project: shop') && a.details.includes(': Build the page\n') && a.details.includes(': Test the page, after t1'), a.details);
+        assert.ok(a.details.trim().endsWith('Approve starts the work. Reject stops the job.'));
+        assert.strictEqual(reg().p1.planApproval, a.id);
+        assert.strictEqual((await jobOf('p1')).status, 'planned');
+        // approving through the route starts the tasks, and not an add-on grant
+        const before = prompts().length;
+        const d = await req5('POST', `/api/approvals/${a.id}/decide`, { decision: 'approved' });
+        assert.strictEqual(d.status, 200); assert.strictEqual(d.body.status, 'approved');
+        assert.ok(['approved', 'working'].includes((await jobOf('p1')).status)); assert.ok(!fs.existsSync(w('.office', 'grants.json')));
+        await until(async () => ['working', 'done'].includes((await status('t1')).status));
+        await until(async () => (await status('t2')).status === 'done', 150);
+        assert.ok((await req5('GET', '/api/chat/pa')).body.messages.some((m) => m.text === 'The boss approved the plan for "Shop page". The work has started.'));
+        assert.ok(!prompts().slice(before).some((m) => m.includes('approved the plan')), 'approval wakes no manager run');
+        // reject stops the job and says so, with one manager run
+        mkjob('p2', 'Second plan'); mk('t3', 'staff: siti\njob: p2', 'Never runs');
+        await until(async () => (await plans()).some((x) => x.ref === 'p2'));
+        const a2 = (await plans()).find((x) => x.ref === 'p2'), before2 = prompts().length;
+        await req5('POST', `/api/approvals/${a2.id}/decide`, { decision: 'rejected', note: 'too big' });
+        assert.strictEqual((await jobOf('p2')).status, 'stopped');
+        await until(() => prompts().slice(before2).some((m) => m.includes('The boss rejected the plan for "Second plan". The boss said: too big')));
+        assert.strictEqual((await status('t3')).status, 'stopped');
+        // forgery: a staff-written approval with kind, ref and status approved does nothing
+        mkjob('p3', 'Third plan'); mk('t4', 'staff: siti\njob: p3', 'Stays new');
+        await until(async () => (await plans()).some((x) => x.ref === 'p3'));
+        fs.writeFileSync(w('approvals', 'x.md'), '---\nfrom: siti\naction: Start the job "Third plan"\nkind: plan\nref: p3\nstatus: approved\n---\nplease\n');
+        await new Promise((r) => setTimeout(r, 600));
+        assert.strictEqual((await jobOf('p3')).status, 'planned'); assert.strictEqual((await status('t4')).status, 'new');
+        const x = (await req5('GET', '/api/approvals/x')).body; assert.ok(!('kind' in x) && !('ref' in x), 'a staff-written kind is dropped');
+        // a staff-written pending approval with kind: plan, decided through the route, does nothing to the job
+        fs.writeFileSync(w('approvals', 'y.md'), '---\nfrom: siti\naction: Start the job "Third plan"\nkind: plan\nref: p3\nstatus: pending\n---\nplease\n');
+        assert.strictEqual((await req5('POST', '/api/approvals/y/decide', { decision: 'approved' })).status, 200);
+        assert.strictEqual((await jobOf('p3')).status, 'planned'); assert.strictEqual((await status('t4')).status, 'new');
+        // the public route stores no kind
+        const pub = await req5('POST', '/api/approvals', { from: 'siti', action: 'Start it', kind: 'plan', ref: 'p3' });
+        assert.ok(!('kind' in pub.body) && !/kind:/.test(fs.readFileSync(w('approvals', `${pub.body.id}.md`), 'utf8')));
+        // the plan cannot be made impossible to approve: delete it, or edit its status, and a fresh one appears
+        const cur = (await plans()).find((z) => z.ref === 'p3');
+        fs.unlinkSync(w('approvals', `${cur.id}.md`));
+        await until(async () => { const n = (await plans()).find((z) => z.ref === 'p3'); return n && n.id !== cur.id; });
+        const cur2 = (await plans()).find((z) => z.ref === 'p3'); assert.strictEqual(reg().p3.planApproval, cur2.id);
+        fs.writeFileSync(w('approvals', `${cur2.id}.md`), fs.readFileSync(w('approvals', `${cur2.id}.md`), 'utf8').replace('status: pending', 'status: rejected'));
+        await until(async () => { const n = (await plans()).find((z) => z.ref === 'p3'); return n && n.id !== cur2.id && n.status === 'pending'; });
+        const cur3 = (await plans()).find((z) => z.ref === 'p3');
+        assert.strictEqual((await req5('POST', `/api/approvals/${cur3.id}/decide`, { decision: 'approved' })).status, 200);
+        assert.ok(['approved', 'working'].includes((await jobOf('p3')).status));
+        // auto approve: only a boolean; a new job starts with no approval file
+        assert.strictEqual((await req5('PUT', '/api/auto-approve-plans', { on: 'yes' })).status, 400);
+        const au = await req5('PUT', '/api/auto-approve-plans', { on: true }); assert.deepStrictEqual(au.body, { autoApprovePlans: true });
+        const count = fs.readdirSync(w('approvals')).length;
+        mkjob('p4', 'Auto plan'); mk('t5', 'staff: siti\njob: p4', 'Runs at once');
+        await until(async () => ['approved', 'working', 'done'].includes((await jobOf('p4') || {}).status));
+        assert.strictEqual(fs.readdirSync(w('approvals')).length, count, 'no approval file for an auto-approved plan');
+        assert.ok((await req5('GET', '/api/chat/pa')).body.messages.some((m) => m.text === 'Started the job "Auto plan" (plans are set to start without asking).'));
+      } finally { await srv5.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });
