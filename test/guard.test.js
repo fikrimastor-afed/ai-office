@@ -239,7 +239,7 @@ test('npm and pnpm: combined and shortened flags cannot go global or move the fo
 test('auto staff: the guard gives no decision on an unlisted command, and still refuses the never-list', () => {
   const r = (c, o = {}) => run(c, { agent: 'wei', ...o });
   const none = (c, o) => { const x = r(c, o); assert.strictEqual(x.decision, null, `no decision: ${c} (${x.reason})`); };
-  for (const c of ['make test', 'ls -la', 'cd /home/ali/projects/8fix && ./gradlew build', 'node -e "1"', 'docker compose up -d', 'git -C /home/ali/projects/8fix describe --always']) none(c);
+  for (const c of ['make test', 'ls -la', 'cd /home/ali/projects/8fix && make test', 'docker compose up -d', 'git -C /home/ali/projects/8fix describe --always']) none(c);
   for (const c of ['git push', 'git push origin main', 'git -C /home/ali/projects/8fix push', 'cd /home/ali/projects/8fix && git reset --hard HEAD~1', 'go test --exec sh', 'npm publish',
     'npm install -g x', 'ls | cat', 'echo $(whoami)', 'make test; rm -rf x', 'rm -rf build', 'curl http://x', 'cd /etc && ls', 'git -C /etc status', 'cd /home/ali/projects/8fix && cd .. && ls'])
     assert.strictEqual(r(c).decision, 'deny', c);
@@ -267,6 +267,22 @@ test('auto is one staff\'s setting: nobody else gains anything, and only the exa
 test('pnpm one-letter flags run together: -r, -i and -F count with -g', () => {   // the letter set is the one-letter shorthands pnpm and npm read
   for (const c of ['pnpm i -rg x', 'pnpm i -ig x', 'pnpm install -Fg']) deny(c, { agent: 'irfan' });
   for (const c of ['pnpm install -r', 'pnpm install -F app']) allow(c, { agent: 'irfan' });
+});
+
+test('fix round 1: the never-list and folder rule read commands as the shell does; Auto staff run commands by name', () => {
+  const bad = ['"git" push', 'git "push"', "g''it push", 'git  push', 'git\tpush', '\\git push', 'git -c a=b push', 'git --no-pager push', '/usr/bin/git push', 'env git push', 'command git push',
+    'git -C /home/ali/projects/8fix "push"', '"rm" -rf x', '\\rm -rf x', 'command rm -rf x', '/bin/rm -rf x', 'sh -c "git push"', "bash -c 'rm -rf /'",
+    'git -C/etc status', 'git --git-dir=/etc/.git status', 'git --work-tree=/etc status', 'git -c x=y -C /etc status', 'cd && ls', 'cd - && ls', 'pushd /etc && ls', 'builtin cd /etc && ls', 'ls && "cd" /etc && ls',
+    "cd ''/etc && ls", 'cd \\/etc && ls', "git -C ''/etc status"];
+  for (const who of ['shah', 'wei', 'priya']) for (const c of bad) assert.strictEqual(run(c, { agent: who }).decision, 'deny', `${who}: ${c}`);
+  for (const c of ['./build.sh', '/usr/bin/make', 'env FOO=1 make', 'xargs rm', 'python -c "import os"', 'node -e "1"', 'timeout 5 make', 'git --no-pager log', 'git -C /home/ali/projects/8fix -C /etc status', 'ls ; x'])
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, 'deny', c);
+  for (const c of ['make test', 'ls -la', 'python manage.py test', 'cd /home/ali/projects/8fix && make test', 'git -C /home/ali/projects/8fix describe --always', 'docker compose up -d', 'pytest -q'])
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
+  assert.strictEqual(run('node scripts/build.js', { agent: 'wei' }).decision, 'allow');   // node on a script in the office is on the always-on Office documents list
+  for (const c of ['git status', 'git -C /home/ali/projects/8fix status', 'cd /home/ali/projects/8fix && git add . && git commit -m "fix: it\'s done"']) allow(c, { agent: 'shah' });
+  const asPa = decide({ tool_name: 'Bash', tool_input: { command: 'make test' }, cwd: '/home/ali/office/staff/wei' }, office, { chat: true, who: 'pa', win: false });
+  assert.strictEqual(asPa.decision, 'deny');
 });
 
 console.log(`\n${n} guard tests passed`);

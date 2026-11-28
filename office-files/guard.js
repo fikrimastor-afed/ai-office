@@ -85,6 +85,11 @@ function splitCommand(cmd) {
   parts.push(cur.trim());
   return parts.some((x) => !x) ? null : parts;
 }
+// A part as the shell reads it: words with every quote and backslash gone.
+const words = (p) => p.split(/\s+/).map((x) => x.replace(/["'\\]/g, ''));
+// Wrappers and shells: with these a command can hide another one (an Auto staff has no list to catch them).
+const WRAPPERS = ['env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
+const INTERPRETERS = ['node', 'python', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun'];
 const firstWord = (s) => { const m = /^("[^"]*"|'[^']*'|\S+)\s*([\s\S]*)$/.exec(s); return m ? [m[1], m[2]] : [s, '']; };
 
 const autoOn = (s) => !!s && s.commandMode === 'auto';
@@ -98,20 +103,21 @@ function decide(input, office, opts = {}) {
   const staffId = input.agent_type || ((P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff') ? P.relative(office.dir, input.cwd).split(/[\\/]/)[1] : '');
   const staff = (office.staff || []).find((s) => s.id === staffId);
   const name = staff ? staff.name : 'The PA';
-  const auto = !!opts.chat && autoOn(staff); // a staff on Auto: a command not on the list goes to Claude's own check
+  const auto = !!opts.chat && opts.who !== 'pa' && autoOn(staff); // a staff on Auto: a command not on the list goes to Claude's own check
   let undecided = false;
   const no = (reason) => ({ decision: opts.chat ? 'deny' : null, reason });
 
   // The never-list stays for Auto too: Claude's own auto mode check allows a push, so this guard refuses it.
+  // It is matched on the words as the shell reads them (quotes and backslashes gone, one space between words).
   // one plain command, or "cd <folder> && command && command" - nothing else
   const parts = cmd ? splitCommand(cmd) : null;
   if (!parts) return no('Only plain commands can run here (no ; | $ ` > < & or similar outside quotes).');
-  for (const p of parts) for (const d of ALWAYS_DENY) if (starts(p, d.trim())) {
+  for (const p of parts) for (const d of ALWAYS_DENY) if (starts(words(p).join(' '), d.trim())) {
     // in the terminal the boss is there to say yes or no himself
     return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
   }
   for (const p of parts) {
-    const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); // as the shell reads it: quotes and backslashes vanish
+    const w = words(p);
     const ws = w[0] === 'npm' && w.includes('--') ? w.slice(0, w.indexOf('--')) : w; // npm: words after a bare -- belong to the script
     const f = (DENY_FLAGS[w[0]] || []).find((d) => ws.some((x, k) => k && /^-/.test(x) && flagHit(w[0], x, d)));
     if (f) return opts.chat ? { decision: 'deny', reason: GLOBAL_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: it installs outside the project.` : MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
@@ -128,20 +134,31 @@ function decide(input, office, opts = {}) {
   const inside = (d) => { if (!d) return false; const x = norm(d); return places.some((pl) => x === pl || x.startsWith(pl + P.sep)); };
   const elsewhere = no(`${name} may only work in the office folder or a linked folder.`);
   let i = 0;
-  if (/^cd\s/.test(parts[0])) {
-    const [dirArg, rest] = firstWord(parts[0].slice(3).trim());
-    if (rest || !inside(realPath(dirArg, input.cwd || office.dir, win))) return elsewhere;
+  // A folder as typed, only when it has no quote or (outside Windows) backslash left inside: then the shell reads it as written.
+  const folder = (a) => { const x = a.replace(/^(["'])([\s\S]*)\1$/, '$2'); return !x || x.startsWith('-') || /["']/.test(x) || (!win && x.includes('\\')) ? null : realPath(x, input.cwd || office.dir, win); };
+  const isCd = (p) => words(p)[0] === 'cd';
+  if (isCd(parts[0])) {
+    const [, args] = firstWord(parts[0]), [dirArg, rest] = firstWord(args);
+    if (rest || !inside(folder(dirArg))) return elsewhere;
     i = 1;
   }
   if (i >= parts.length) return { decision: 'allow', reason: 'change folder' };
   for (let p of parts.slice(i)) {
-    if (/^cd\s/.test(p)) return no('Use one cd at the start, then the commands.');
+    if (isCd(p)) return no('Use one cd at the start, then the commands.');
     const gc = /^git\s+-C\s+([\s\S]*)$/.exec(p); // git -C "<folder>" <command>
     if (gc) {
       const [dirArg, rest] = firstWord(gc[1]);
-      if (!inside(realPath(dirArg, input.cwd || office.dir, win))) return elsewhere;
+      if (!inside(folder(dirArg))) return elsewhere;
       p = `git ${rest}`;
-      for (const d of ALWAYS_DENY) if (starts(p, d.trim())) return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
+      for (const d of ALWAYS_DENY) if (starts(words(p).join(' '), d.trim())) return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
+    }
+    const w = words(p);
+    if (w[0] === 'git' && /^-/.test(w[1] || '')) return no('Put the git command right after git (only -C "<folder>" may come first).');
+    if (auto) { // an Auto staff has no list to catch these: run by name, no wrapper, no code on the command line
+      const [first, ...args] = w;
+      if (/[\\/]/.test(first)) return no('Run the command by its name, not by a path.');
+      if (WRAPPERS.includes(first)) return no(`Run the command itself, not through ${first}.`);
+      if (INTERPRETERS.includes(first) && args.some((x) => /^(-[ecrp]|--eval$|--print$|--command$)/.test(x))) return no('Save the code in a file in the project and run the file.');
     }
     if (!allowed.some((a) => starts(p, a))) {
       if (auto) { undecided = true; continue; }
