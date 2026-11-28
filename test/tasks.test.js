@@ -201,6 +201,39 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(tasks.read('n17').status, 'done');
   });
 
+  await test('a task for a role goes to a free staff with that role, and the office writes who took it', async () => {
+    putH('r1', 'role: sales', 'Quote for a role');           // role match ignores case
+    tasks.scan(); await until(() => endedOf('r1'));
+    const t = tasks.read('r1');
+    assert.strictEqual(t.staff, 'siti'); assert.strictEqual(t.status, 'done');
+  });
+
+  await test('a role task waits while everyone with that role is busy', async () => {
+    putH('r2', 'staff: siti', 'LONG busy'); putH('r3', 'role: Sales', 'next');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'r2'));
+    assert.strictEqual(tasks.read('r3').staff || '', '');
+    assert.deepStrictEqual(tasks.board().waiting.find((w) => w.id === 'r3').waitingFor, []);
+    await until(() => endedOf('r3'));
+    assert.strictEqual(tasks.read('r3').staff, 'siti');
+  });
+
+  await test('no staff and no role, or a role nobody has, fails with a plain reason', async () => {
+    putH('r4', 'role: Plumber', 'x'); putH('r5', 'project:', 'y');
+    tasks.scan();
+    assert.strictEqual(tasks.read('r4').result, 'There is no active staff with the role "Plumber".');
+    assert.strictEqual(tasks.read('r5').result, 'A task needs a staff or a role.');
+  });
+
+  await test('if the last staff with a role is archived while a role task waits, it fails plainly', async () => {
+    putH('r6', 'staff: siti', 'LONG busy'); putH('r7', 'role: Sales', 'later');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'r6'));
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.filter((s) => s.id !== 'siti') }));
+    tasks.scan();
+    assert.strictEqual(tasks.read('r7').result, 'There is no active staff with the role "Sales".');
+    fs.writeFileSync(f, JSON.stringify(cfg)); tasks.stopAll(); await until(() => tasks.active().length === 0);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
