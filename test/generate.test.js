@@ -268,5 +268,15 @@ test('agent teams: a business office, and one from before this update, get no en
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('OFFICE.md documents the software settings and has no dashes', () => {
+  for (const c of [businessCfg, softwareCfg]) {
+    const m = T.officeMd(c);
+    assert.ok(m.includes('"type"')); assert.ok(m.includes('agentTeams')); assert.ok(m.includes('GitHub (read only)'));
+    assert.ok(m.includes('pnpm') && m.includes('Yarn') && m.includes('Rust'));
+    assert.doesNotMatch(m, /^- `skills`/m);
+    assert.doesNotMatch(m, /[\u2013\u2014]/);
+  }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);

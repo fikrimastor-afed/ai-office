@@ -26,9 +26,23 @@ office in your browser, and you approve anything important before it leaves the 
 
 File paths in the chat are links: click one and the file opens in its app (PowerPoint, Excel, your browser).
 
+## Software house
+
+Choose "software" at setup (right after the company name) and the office is a software team instead of a
+business team. The manager becomes your tech lead, and the default team is Zara (Product Analyst), Irfan
+(Backend Engineer), Wei Jie (Frontend Engineer), Priya (QA Engineer) and Hakim (Reviewer). Arif (DevOps
+Engineer) and Sofia (Designer) are optional. The type cannot be changed later.
+
+- The code lives in a linked project folder, not inside the office. Engineers start with Git and npm commands ticked, the Reviewer with Git. Staff cannot push.
+- The tech lead can look up a GitHub issue, pull request or project item by number, read only. It works in the dashboard chat and needs `gh` logged in.
+- Nothing is pushed or published without your OK in Needs your OK.
+- In a terminal, Claude Code agent teams are on by default (experimental; switch in Settings > General). Your own Claude skills work as usual there.
+- Coming next: reviews and tests enforced by the office, one branch per task, budgets, pushing after your approval. For now the tech lead is told to add a QA task and a Reviewer task, but nothing forces it.
+
 ## What you need
 
 - [Claude Code](https://claude.com/claude-code), logged in with your Claude account (Pro or Max).
+- Optional: the GitHub `gh` tool, logged in, so the manager can look up an issue or pull request by number (software house).
 - Nothing else. The installer finds Node.js or puts a private copy in your home folder, and the office
   installs its own document tools the first time it starts.
 
@@ -84,7 +98,7 @@ Claude usage at API prices. On a Claude subscription you are not billed this; it
 |---|---|
 | Files | Only the office folder and folders you link (Settings, or per project). Everything else is refused. |
 | Office rules | Staff cannot change their own rules, the office settings or the approvals log. |
-| Commands | Only what you tick per staff (git, npm, composer, Laravel, Office documents), checked by a small guard script before every command, and only in the office or a linked folder. Never from the dashboard: `git push`, `reset --hard`, deleting with `rm`, `curl`, `sudo` and similar. |
+| Commands | Only what you tick per staff (git, npm, pnpm, Yarn, Python, Go, Rust, composer, Laravel, Office documents; GitHub read only for the manager), checked by a small guard script before every command, and only in the office or a linked folder. Never from the dashboard: `git push`, `reset --hard`, deleting with `rm`, `curl`, `sudo` and similar. |
 | Office documents | Staff may run `node` only on a script saved inside the office. |
 | Actions that leave the office | Ask first by default (Needs your OK). |
 | Your data | Stays in your office folder. The dashboard listens on your own computer only (localhost). AI Office stores no logins or passwords. |
