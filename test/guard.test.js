@@ -285,4 +285,23 @@ test('fix round 1: the never-list and folder rule read commands as the shell doe
   assert.strictEqual(asPa.decision, 'deny');
 });
 
+test('fix round 2: Windows program names, git and find flags that run programs, folders after cd', () => {
+  const win = (command, agent) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: agent, cwd: office.dir }, office, { chat: true, win: true }).decision;
+  for (const who of ['wei', 'priya']) for (const c of ['"C:\\Git\\cmd\\git.exe" push', '"C:\\Program Files\\Git\\cmd\\git.exe" push']) assert.strictEqual(win(c, who), 'deny', `${who}: ${c}`);
+  const bad = ['git.exe push', 'GIT.EXE push', 'rm.exe -rf x', 'git.cmd push', 'git config alias.p push', 'git config core.sshCommand x', 'git send-pack origin', 'unlink x', 'shred x', 'npx cowsay', 'npm exec cowsay', 'bunx x',
+    "git fetch --upload-pack='touch x' /tmp/r", 'git pull --upload-pack=x', 'git -C /home/ali/projects/8fix fetch --upload-pack x', 'find . -delete', 'find . -exec rm {} +',
+    'python -Sc "1"', 'python -Ic "1"', 'perl -ne 1', 'perl -E 1', 'node --eval=1', 'node --print=1', 'python2 -c 1', 'lua -e 1'];
+  for (const who of ['shah', 'wei', 'priya']) for (const c of bad) if (who !== 'shah' || /^git /.test(c)) assert.strictEqual(run(c, { agent: who }).decision, 'deny', `${who}: ${c}`);
+  for (const c of ["git fetch --upload-pack='touch x' /tmp/r", 'git pull --receive-pack=x', 'git config alias.p push']) deny(c, { agent: 'shah' });
+  for (const c of ['find . -name "*.js"', 'python -m pytest -q', 'python -mpytest', 'python manage.py test', 'python -u script.py', 'git --version', 'node --version', 'python -V', 'php artisan test', 'ruby script.rb'])
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
+  for (const c of ['git fetch', 'git pull', 'git fetch origin main']) allow(c, { agent: 'shah' });
+  const sc = '/home/ali/office/staff/shah';
+  for (const who of ['shah', 'wei']) deny('cd /home/ali/office && git -C ../.. add .', { agent: who, cwd: sc });
+  allow('cd /home/ali/projects/8fix && git -C . status', { agent: 'shah', cwd: sc });
+  allow('cd /home/ali/projects/8fix && git -C src status', { agent: 'shah', cwd: sc });
+  deny('cd /home/ali/office && node ../../x.cjs', { agent: 'shah', cwd: sc });
+  allow('cd /home/ali/office && node projects/raya/make.cjs', { agent: 'shah', cwd: sc });
+});
+
 console.log(`\n${n} guard tests passed`);

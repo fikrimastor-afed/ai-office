@@ -37,10 +37,12 @@ const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 
   'php artisan migrate:fresh', 'php artisan migrate:reset', 'php artisan migrate:refresh', 'php artisan db:wipe', 'php artisan tinker', 'php artisan down',
   'npm publish', 'composer remove', 'yarn global',
   'pnpm publish', 'pnpm dlx', 'pnpm exec', 'yarn publish', 'yarn npm publish', 'yarn dlx', 'yarn exec', 'cargo publish', 'cargo install', 'cargo run',
-  'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
+  'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp',
+  'git config', 'git send-pack', 'unlink ', 'shred ', 'npx', 'npm exec', 'bunx'];
 // Flags that make an allowed command run any program or delete a folder anywhere, or move it outside the allowed
 // folders (MOVE_FLAGS): refused whatever allowed the command. Case matters (go test -c is fine).
 const DENY_FLAGS = { go: ['-exec', '-toolexec', '-vettool', '-C'], cargo: ['--config', '--manifest-path', '-C'], pytest: ['--basetemp'], python: ['--basetemp'], python3: ['--basetemp'],
+  git: ['--upload-pack', '--receive-pack', '--exec'], find: ['-delete', '-exec', '-execdir', '-ok', '-okdir'],
   yarn: ['--cwd'], pnpm: ['-C', '--dir', '-g', '--global'], npm: ['--prefix', '-C', '-g', '-L', '--global', '--location'] };
 const MOVE_FLAGS = ['-C', '--manifest-path', '--cwd', '--dir', '--prefix', '-g', '-L', '--global', '--location'];
 const GLOBAL_FLAGS = ['-g', '-L', '--global', '--location']; // install outside the project
@@ -86,10 +88,11 @@ function splitCommand(cmd) {
   return parts.some((x) => !x) ? null : parts;
 }
 // A part as the shell reads it: words with every quote and backslash gone.
-const words = (p) => p.split(/\s+/).map((x) => x.replace(/["'\\]/g, ''));
+// The program name is lower case without .exe, .cmd or .bat (Windows runs git.exe as git).
+const words = (p) => { const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); w[0] = w[0].replace(/\.(exe|cmd|bat)$/i, '').toLowerCase(); return w; };
 // Wrappers and shells: with these a command can hide another one (an Auto staff has no list to catch them).
 const WRAPPERS = ['env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
-const INTERPRETERS = ['node', 'python', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun'];
+const INTERPRETERS = ['node', 'python', 'python2', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'lua'];
 const firstWord = (s) => { const m = /^("[^"]*"|'[^']*'|\S+)\s*([\s\S]*)$/.exec(s); return m ? [m[1], m[2]] : [s, '']; };
 
 const autoOn = (s) => !!s && s.commandMode === 'auto';
@@ -133,13 +136,14 @@ function decide(input, office, opts = {}) {
   const places = [office.dir, ...(office.linked || [])].map(norm);
   const inside = (d) => { if (!d) return false; const x = norm(d); return places.some((pl) => x === pl || x.startsWith(pl + P.sep)); };
   const elsewhere = no(`${name} may only work in the office folder or a linked folder.`);
-  let i = 0;
+  let i = 0, base = input.cwd || office.dir; // relative folders and scripts are read from base (the cd folder, once there is one)
   // A folder as typed, only when it has no quote or (outside Windows) backslash left inside: then the shell reads it as written.
-  const folder = (a) => { const x = a.replace(/^(["'])([\s\S]*)\1$/, '$2'); return !x || x.startsWith('-') || /["']/.test(x) || (!win && x.includes('\\')) ? null : realPath(x, input.cwd || office.dir, win); };
+  const folder = (a) => { const x = a.replace(/^(["'])([\s\S]*)\1$/, '$2'); return !x || x.startsWith('-') || /["']/.test(x) || (!win && x.includes('\\')) ? null : realPath(x, base, win); };
   const isCd = (p) => words(p)[0] === 'cd';
   if (isCd(parts[0])) {
     const [, args] = firstWord(parts[0]), [dirArg, rest] = firstWord(args);
-    if (rest || !inside(folder(dirArg))) return elsewhere;
+    base = folder(dirArg);
+    if (rest || !inside(base)) return elsewhere;
     i = 1;
   }
   if (i >= parts.length) return { decision: 'allow', reason: 'change folder' };
@@ -153,12 +157,12 @@ function decide(input, office, opts = {}) {
       for (const d of ALWAYS_DENY) if (starts(words(p).join(' '), d.trim())) return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
     }
     const w = words(p);
-    if (w[0] === 'git' && /^-/.test(w[1] || '')) return no('Put the git command right after git (only -C "<folder>" may come first).');
+    if (w[0] === 'git' && /^-/.test(w[1] || '') && !['--version', '--help'].includes(w[1])) return no('Put the git command right after git (only -C "<folder>" may come first).');
     if (auto) { // an Auto staff has no list to catch these: run by name, no wrapper, no code on the command line
       const [first, ...args] = w;
-      if (/[\\/]/.test(first)) return no('Run the command by its name, not by a path.');
+      if (/[\\/]/.test(firstWord(p)[0])) return no('Run the command by its name, not by a path.');
       if (WRAPPERS.includes(first)) return no(`Run the command itself, not through ${first}.`);
-      if (INTERPRETERS.includes(first) && args.some((x) => /^(-[ecrp]|--eval$|--print$|--command$)/.test(x))) return no('Save the code in a file in the project and run the file.');
+      if (INTERPRETERS.includes(first) && args.some((x) => (/^-[A-Za-z]*[ecrpE]/.test(x) && !/^-m/.test(x)) || /^--(eval|print|command)(=|$)/.test(x))) return no('Save the code in a file in the project and run the file.');
     }
     if (!allowed.some((a) => starts(p, a))) {
       if (auto) { undecided = true; continue; }
@@ -167,7 +171,7 @@ function decide(input, office, opts = {}) {
     // Office documents: node only on a script file saved in the office or a linked folder (no -e, no outside scripts)
     if (starts(p, 'node') && !(staff.customCommands || []).some((c) => starts(p, c))) {
       const [file] = firstWord(p.slice(4).trim());
-      if (!file || file.startsWith('-') || !/\.(c?js|mjs)["']?$/i.test(file) || !inside(realPath(file, input.cwd || office.dir, win))) {
+      if (!file || file.startsWith('-') || !/\.(c?js|mjs)["']?$/i.test(file) || !inside(realPath(file, base, win))) {
         if (auto) { undecided = true; continue; }
         return no(`${name} may run node only on a script saved in the office or a linked folder, like: node "projects/<project>/make-deck.cjs".`);
       }
