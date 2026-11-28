@@ -130,6 +130,20 @@ fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
     assert.ok(text.includes('x'.repeat(300)) && !text.includes('x'.repeat(301)));
   });
 
+  await test('a missing jobs folder does not drop every OK; only a deleted file does', async () => {
+    const reg = () => JSON.parse(fs.readFileSync(path.join(dir, '.office', 'jobs.json'), 'utf8')), jd = path.join(dir, 'jobs');
+    const keep = {};
+    for (const id of ['m1', 'm2']) { keep[id] = `---\nproject:\n---\nJob ${id}\n`; fs.writeFileSync(path.join(jd, `${id}.md`), keep[id]); jobs.sync(); jobs.setStatus(id, 'approved'); }
+    const saved = fs.readdirSync(jd).map((n) => [n, fs.readFileSync(path.join(jd, n), 'utf8')]);
+    fs.rmSync(jd, { recursive: true }); jobs.sync();
+    assert.ok(fs.existsSync(jd), 'the folder is created again');
+    assert.deepStrictEqual(['m1', 'm2'].map((id) => reg()[id].status), ['approved', 'approved']);
+    for (const [n, t] of saved) fs.writeFileSync(path.join(jd, n), t);
+    jobs.sync(); assert.deepStrictEqual(['m1', 'm2'].map((id) => jobs.get(id).status), ['approved', 'approved']);
+    fs.rmSync(path.join(jd, 'm1.md')); jobs.sync();
+    assert.ok(!('m1' in reg()) && reg().m2.status === 'approved');
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} job tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
