@@ -173,7 +173,7 @@ function taskText(id, t) {
 async function draw3d() {
   const open = S.inbox.filter((x) => x.status !== 'done').sort((a, b) => Number(a.ticket) - Number(b.ticket));
   const opts = {
-    company: S.office.company,
+    company: S.office.company, mgrLabel: mgrName(),
     pa: { name: pa().name, colour: pa().colour, look: pa().look || { scarf: true, skin: '#F2C9A0' } },
     staff: S.staff.map(({ id, name, role, colour, look }) => ({ id, name, role, colour, look })),
     status: Object.fromEntries(Object.entries(S.status.people).map(([k, x]) => [k, { status: x.status, task: (x.status === 'working' && ((S.tasks || []).find((t) => t.staff === k) || {}).step) || taskText(k, x.task) }])),
@@ -361,7 +361,7 @@ ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in t
       <div class="pb form" id="pf">${runFields('pa')}${(S.presets || []).filter((x) => x.id === 'github').map((x) => `<label class="lbl" style="margin-top:12px">Commands</label><div class="cmdgrid"><label class="cmd"><input type="checkbox" name="mcmd" value="${esc(x.id)}" ${(pa().commands || []).includes(x.id) ? 'checked' : ''}><span><b>${esc(x.label)}</b><br><span class="faint">${esc(x.about)}</span></span></label></div>`).join('')}</div>
       <div class="formfoot"><button class="btn pri" id="pSave">${icon('save')}Save</button></div>`;
     $('#pSave').onclick = () => act(() => api('manager', 'PUT', { model: $('[name=model]', f).value, effort: $('[name=effort]', f).value, commands: $$('[name=mcmd]:checked', f).map((x) => x.value) }), 'Saved')
-      .then(async () => { S.run = await api('run'); renderStaffForm(); });
+      .then(async (o) => { S.office = o; S.run = await api('run'); renderStaffForm(); });
   } else {
     const s = S.staff.find((x) => x.id === id);
     if (!s) { f.innerHTML = `<div class="empty"><b>Pick a staff</b>Click a row to edit their job, rules and look.</div>`; S.sel.staff = null; return; }
@@ -752,7 +752,7 @@ function renderChats() {
     $('.wstrips', w).innerHTML = workLine(work) + waits.map((a) => `<div class="wstrip">${icon('hand')}<div class="sq"><b>Waiting for your OK</b>${esc(a.action)}</div><button class="btn sm ok" data-ok="${esc(a.id)}" data-d="approved">Approve</button><button class="btn sm" data-ok="${esc(a.id)}" data-d="rejected">Reject</button></div>`).join('');
     const body = $('.wb', w);
     const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
-    const intro = id === 'pa' ? `${esc(p.name)} is your manager. Tell them what you need; they hand it to the right staff.` : `Direct chat with ${esc(p.name)} (${esc(p.role)}).`;
+    const intro = id === 'pa' ? `${esc(p.name)} is your ${mgrName().toLowerCase()}. Tell them what you need; they hand it to the right staff.` : `Direct chat with ${esc(p.name)} (${esc(p.role)}).`;
     const last = c.messages[c.messages.length - 1] || {};
     const sig = `${c.messages.length}|${last.at || ''}|${(last.text || '').length}|${intro}`;
     if (body.dataset.sig !== sig) { body.dataset.sig = sig; body.innerHTML = `<div class="wsys">${intro}</div>${c.messages.map((m) => msgHtml(id, m)).join('')}<div class="live"></div>`; }
