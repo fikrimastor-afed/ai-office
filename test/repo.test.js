@@ -10,6 +10,8 @@ const R = require('../lib/repo');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-repo-'));
 let n = 0;
+const root = path.join(tmp, 'root'); fs.mkdirSync(root);
+const W = (name) => path.join(root, name);
 const test = (name, fn) => { fn(); console.log(`ok ${++n} ${name}`); };
 const G = (cwd, ...a) => { const r = R.git(cwd, a); assert(r.ok, `git ${a.join(' ')}: ${r.err}`); return r.out; };
 const mk = (name) => {
@@ -47,8 +49,8 @@ try {
     const base = R.state(d).branch;
     assert(R.createBranch(d, 'office/job1', base).ok);
     assert.strictEqual(R.state(d).branch, base, 'createBranch does not check out');
-    const wt = path.join(tmp, 'wt1');
-    assert(R.addWorktree(d, wt, 'office/t1', 'office/job1').ok);
+    const wt = W('wt1');
+    assert(R.addWorktree(d, wt, 'office/t1', 'office/job1', root).ok);
     fs.writeFileSync(path.join(wt, 'b.txt'), 'new');
     assert.deepStrictEqual(R.commitAll(wt, 'add b'), { ok: true, committed: true });
     assert.deepStrictEqual(R.commitAll(wt, 'again'), { ok: true, committed: false });
@@ -68,9 +70,9 @@ try {
     const d = mk('cf');
     const base = R.state(d).branch;
     R.createBranch(d, 'office/job', base);
-    const w1 = path.join(tmp, 'cw1'), w2 = path.join(tmp, 'cw2');
-    assert(R.addWorktree(d, w1, 'office/c1', 'office/job').ok);
-    assert(R.addWorktree(d, w2, 'office/c2', 'office/job').ok);
+    const w1 = W('cw1'), w2 = W('cw2');
+    assert(R.addWorktree(d, w1, 'office/c1', 'office/job', root).ok);
+    assert(R.addWorktree(d, w2, 'office/c2', 'office/job', root).ok);
     fs.writeFileSync(path.join(w1, 'a.txt'), 'one\nAAA\nthree\n'); R.commitAll(w1, 'a');
     fs.writeFileSync(path.join(w2, 'a.txt'), 'one\nBBB\nthree\n'); R.commitAll(w2, 'b');
     assert(R.merge(d, 'office/job', 'office/c1').ok);
@@ -81,30 +83,11 @@ try {
     assert.strictEqual(G(d, 'rev-parse', 'office/job'), after);
   });
 
-  test('removeWorktree removes the folder and the entry, and refuses foreign folders', () => {
-    const d = mk('rm');
-    const wt = path.join(tmp, 'rmwt');
-    assert(R.addWorktree(d, wt, 'office/r1', R.state(d).branch).ok);
-    assert(R.listWorktrees(d).some((w) => w.branch === 'office/r1'));
-    assert(R.removeWorktree(d, wt).ok);
-    assert(!fs.existsSync(wt));
-    assert(!R.listWorktrees(d).some((w) => w.branch === 'office/r1'));
-    const other = path.join(tmp, 'other'); fs.mkdirSync(other); fs.writeFileSync(path.join(other, 'keep.txt'), 'x');
-    assert.strictEqual(R.removeWorktree(d, other).ok, false);
-    assert(fs.existsSync(path.join(other, 'keep.txt')), 'a non-worktree folder is never deleted');
-    // unregistered but still pointing into this repo
-    const wt2 = path.join(tmp, 'rmwt2');
-    assert(R.addWorktree(d, wt2, 'office/r2', R.state(d).branch).ok);
-    fs.rmSync(path.join(d, '.git', 'worktrees'), { recursive: true, force: true });
-    assert(R.removeWorktree(d, wt2).ok);
-    assert(!fs.existsSync(wt2));
-  });
-
   test('bad ids and bases are refused before git runs', () => {
     const nowhere = path.join(tmp, 'does', 'not', 'exist');
-    for (const id of ['x; rm -rf y', '../x', '-D', '', 'a..b', 'a.lock', 'a.', 'a b']) {
+    for (const id of ['x; rm -rf y', '../x', '-D', '', 'a..b', 'a.lock', 'a.', 'a b', 'HEAD']) {
       const name = `office/${id}`;
-      for (const r of [R.createBranch(nowhere, name, 'main'), R.addWorktree(nowhere, path.join(tmp, 'zz'), name, 'main'), R.push(nowhere, name)]) {
+      for (const r of [R.createBranch(nowhere, name, 'main'), R.addWorktree(nowhere, path.join(root, 'zz'), name, 'main', root), R.push(nowhere, name)]) {
         assert.strictEqual(r.ok, false, id); assert(!/not found/.test(r.err), `git ran for ${id}`);
       }
     }
@@ -131,11 +114,176 @@ try {
   test('diffStat shows the changed files', () => {
     const d = mk('ds');
     const base = R.state(d).branch;
-    const wt = path.join(tmp, 'dswt');
-    R.addWorktree(d, wt, 'office/d', base);
+    const wt = W('dswt');
+    R.addWorktree(d, wt, 'office/d', base, root);
     fs.writeFileSync(path.join(wt, 'c.txt'), 'c'); R.commitAll(wt, 'c');
     assert(R.diffStat(d, base, 'office/d').includes('c.txt'));
     assert.strictEqual(R.diffStat(d, '-x', 'office/d'), '');
+  });
+
+  // a repo with uncommitted edits, an untracked file and one stash entry
+  const dirty = (name) => {
+    const d = mk(name);
+    fs.writeFileSync(path.join(d, 'a.txt'), 'stashed\n'); G(d, 'stash');
+    fs.writeFileSync(path.join(d, 'a.txt'), 'edited\n'); fs.writeFileSync(path.join(d, 'u.txt'), 'untracked');
+    return d;
+  };
+  const snap = (d) => JSON.stringify([G(d, 'rev-parse', 'HEAD'), G(d, 'symbolic-ref', 'HEAD'), G(d, 'status', '--porcelain'), fs.readFileSync(path.join(d, 'a.txt'), 'utf8'), G(d, 'stash', 'list')]);
+
+  test('every function leaves a dirty checkout exactly as it was', () => {
+    const d = dirty('dirty'); const before = snap(d); const base = R.state(d).branch;
+    const bare = path.join(tmp, 'dbare.git'); fs.mkdirSync(bare); G(bare, 'init', '--bare');
+    const same = (what) => assert.strictEqual(snap(d), before, what);
+    R.git(d, ['status']); same('git');
+    R.isRepo(d); same('isRepo'); R.state(d); same('state'); R.ensureRepo(d); same('ensureRepo');
+    R.branchExists(d, 'office/z'); same('branchExists');
+    assert(R.createBranch(d, 'office/dj', base).ok); same('createBranch');
+    const wt = W('dirtywt');
+    assert(R.addWorktree(d, wt, 'office/dt', 'office/dj', root).ok); same('addWorktree');
+    R.listWorktrees(d); same('listWorktrees');
+    fs.writeFileSync(path.join(wt, 'n.txt'), 'n');
+    assert(R.commitAll(wt, 'n').ok); same('commitAll');
+    assert(R.merge(d, 'office/dj', 'office/dt').ok); same('merge');
+    R.diffStat(d, base, 'office/dj'); same('diffStat');
+    G(d, 'remote', 'add', 'origin', bare); R.hasRemote(d, 'origin'); same('hasRemote');
+    assert(R.push(d, 'office/dj').ok); same('push');
+    assert(R.removeWorktree(d, wt, root).ok); same('removeWorktree');
+    R.prune(d); same('prune');
+    assert(fs.existsSync(path.join(d, 'u.txt')));
+  });
+
+  test('removeWorktree never deletes the project, user worktrees, other folders or link targets', () => {
+    const d = dirty('safe'); const before = snap(d);
+    const base = R.state(d).branch;
+    const intact = () => { assert.strictEqual(snap(d), before); assert(fs.existsSync(path.join(d, 'u.txt'))); };
+    for (const x of [d, d + path.sep, path.join(d, '.')]) { assert.strictEqual(R.removeWorktree(d, x, root).ok, false, x); intact(); }
+    // a worktree the user made on their own branch, inside and outside root
+    G(d, 'branch', 'feature');
+    const inFeature = W('userwt'), outFeature = path.join(tmp, 'userwt-out');
+    G(d, 'worktree', 'add', inFeature, 'feature');
+    G(d, 'branch', 'feature2');
+    G(d, 'worktree', 'add', outFeature, 'feature2');
+    fs.writeFileSync(path.join(inFeature, 'work.txt'), 'precious'); fs.writeFileSync(path.join(outFeature, 'work.txt'), 'precious');
+    assert.strictEqual(R.removeWorktree(d, inFeature, root).ok, false);
+    assert.strictEqual(R.removeWorktree(d, outFeature, root).ok, false);
+    assert(fs.existsSync(path.join(inFeature, 'work.txt')) && fs.existsSync(path.join(outFeature, 'work.txt')));
+    assert(R.listWorktrees(d).some((w) => w.branch === 'feature'));
+    // a different spelling of a folder outside root
+    fs.mkdirSync(path.join(tmp, 'plain-wt')); fs.writeFileSync(path.join(tmp, 'plain-wt', 'k'), 'k');
+    assert.strictEqual(R.removeWorktree(d, path.join(tmp, 'PLAIN-wt'), root).ok, false);
+    assert(fs.existsSync(path.join(tmp, 'plain-wt', 'k')));
+    // a planted .git file outside root
+    const planted = path.join(tmp, 'planted'); fs.mkdirSync(planted);
+    fs.writeFileSync(path.join(planted, '.git'), `gitdir: ${path.join(d, '.git', 'worktrees', 'x')}\n`); fs.writeFileSync(path.join(planted, 'k'), 'k');
+    assert.strictEqual(R.removeWorktree(d, planted, root).ok, false);
+    assert(fs.existsSync(path.join(planted, 'k')));
+    // the same planted file inside root counts as a plain leftover folder, but a relative path or root itself is refused
+    assert.strictEqual(R.removeWorktree(d, root, root).ok, false); assert(fs.existsSync(root));
+    assert.strictEqual(R.removeWorktree(d, 'root/x', root).ok, false);
+    // a symlink inside root pointing outside: the target survives
+    const target = path.join(tmp, 'target'); fs.mkdirSync(target); fs.writeFileSync(path.join(target, 'k'), 'k');
+    let linked = true;
+    try { fs.symlinkSync(target, W('lnk'), 'dir'); } catch { linked = false; }
+    if (linked) { assert.strictEqual(R.removeWorktree(d, W('lnk'), root).ok, false); assert(fs.existsSync(path.join(target, 'k'))); }
+    intact();
+    // a genuine office worktree, registered, and a leftover folder git no longer knows
+    const ow = W('ox');
+    assert(R.addWorktree(d, ow, 'office/x', base, root).ok);
+    assert(R.removeWorktree(d, ow, root).ok);
+    assert(!fs.existsSync(ow) && !R.listWorktrees(d).some((w) => w.branch === 'office/x'));
+    const left = W('left'); fs.mkdirSync(left); fs.writeFileSync(path.join(left, 'f'), 'f');
+    assert(R.removeWorktree(d, left, root).ok); assert(!fs.existsSync(left));
+    intact();
+  });
+
+  test('case: a registered worktree survives a different spelling', () => {
+    const d = mk('case'); const base = R.state(d).branch;
+    fs.writeFileSync(path.join(root, 'ci_a'), '');
+    const insensitive = fs.existsSync(path.join(root, 'CI_A'));
+    fs.rmSync(path.join(root, 'ci_a'));
+    assert(R.addWorktree(d, W('UP'), 'office/up', base, root).ok);
+    fs.mkdirSync(W('up2')); fs.writeFileSync(W('up2') + '/k', 'k');
+    R.removeWorktree(d, W('up'), root);
+    if (!insensitive) assert(R.listWorktrees(d).some((w) => w.branch === 'office/up'), 'UP is still registered');
+    assert(fs.existsSync(W('up2') + '/k'));
+  });
+
+  test('no hooks and no fsmonitor run', () => {
+    const d = mk('hooks');
+    const marks = path.join(tmp, 'marks'); fs.mkdirSync(marks);
+    const sh = (name) => `#!/bin/sh\necho x > "${path.join(marks, name)}"\n`;
+    if (process.platform !== 'win32') for (const h of ['pre-commit', 'post-checkout', 'post-merge', 'post-commit', 'commit-msg', 'pre-merge-commit']) {
+      const f = path.join(d, '.git', 'hooks', h); fs.writeFileSync(f, sh(h)); fs.chmodSync(f, 0o755);
+    }
+    if (process.platform !== 'win32') {
+      const fm = path.join(tmp, 'fsm.sh'); fs.writeFileSync(fm, sh('fsmonitor')); fs.chmodSync(fm, 0o755);
+      G(d, 'config', 'core.fsmonitor', fm);
+      spawnSync('git', ['status'], { cwd: d }); // sanity: it would run
+      assert(fs.existsSync(path.join(marks, 'fsmonitor')), 'the test setup fires fsmonitor');
+      fs.rmSync(path.join(marks, 'fsmonitor'));
+    }
+    const base = R.state(d).branch;
+    R.createBranch(d, 'office/h', base);
+    const wt = W('hookwt'), wt2 = W('hookwt2');
+    assert(R.addWorktree(d, wt, 'office/h1', 'office/h', root).ok);
+    assert(R.addWorktree(d, wt2, 'office/h2', 'office/h', root).ok);
+    fs.writeFileSync(path.join(wt, 'h.txt'), 'h'); assert(R.commitAll(wt, 'h').committed);
+    fs.writeFileSync(path.join(wt2, 'g.txt'), 'g'); R.commitAll(wt2, 'g');
+    assert(R.merge(d, 'office/h', 'office/h1').ok);
+    assert(R.merge(d, 'office/h', 'office/h2').ok);
+    R.state(d);
+    assert.deepStrictEqual(fs.readdirSync(marks), []);
+  });
+
+  test('merge needs a plain existing local branch and never moves main', () => {
+    const d = mk('into'); const base = R.state(d).branch;
+    R.createBranch(d, 'office/src', base);
+    G(d, 'checkout', '-q', '-b', 'other');
+    const head = G(d, 'rev-parse', base);
+    const wt = W('intowt'); R.addWorktree(d, wt, 'office/s2', base, root);
+    fs.writeFileSync(path.join(wt, 's.txt'), 's'); R.commitAll(wt, 's');
+    for (const into of [`refs/heads/${base}`, `heads/${base}`, 'HEAD', head, '-x', 'nope', `${base}/../x`]) {
+      assert.strictEqual(R.merge(d, into, 'office/s2').ok, false, into);
+      assert.strictEqual(G(d, 'rev-parse', base), head, into);
+    }
+    G(d, 'tag', 'v1'); assert.strictEqual(R.merge(d, 'v1', 'office/s2').ok, false);
+    assert.strictEqual(R.merge(d, 'other', 'office/s2').ok, false, 'checked out in the project folder');
+    assert(R.merge(d, base, 'office/s2').ok);
+    assert.notStrictEqual(G(d, 'rev-parse', base), head, 'a real merge moves the target');
+  });
+
+  test('addWorktree needs an absolute, empty folder inside root', () => {
+    const d = mk('aw'); const base = R.state(d).branch;
+    assert.strictEqual(R.addWorktree(d, '-f', 'office/dd2', base, root).ok, false);
+    assert(!fs.existsSync(path.join(d, '-f')));
+    assert.strictEqual(R.addWorktree(d, path.join(tmp, 'outside-wt'), 'office/o', base, root).ok, false);
+    assert.strictEqual(R.addWorktree(d, root, 'office/o', base, root).ok, false);
+    fs.mkdirSync(W('full')); fs.writeFileSync(W('full') + '/k', 'k');
+    assert.strictEqual(R.addWorktree(d, W('full'), 'office/o', base, root).ok, false);
+    fs.mkdirSync(W('empty'));
+    assert(R.addWorktree(d, W('empty'), 'office/e', base, root).ok);
+    assert(!R.branchExists(d, 'office/o'));
+  });
+
+  test('a folder inside another repo is not a repo; ensureRepo makes its own', () => {
+    const d = mk('outer'); const sub = path.join(d, 'projects', 'x', 'code'); fs.mkdirSync(sub, { recursive: true });
+    assert.strictEqual(R.isRepo(sub), false); assert.strictEqual(R.isRepo(d), true);
+    assert.deepStrictEqual(R.ensureRepo(sub), { ok: true, created: true });
+    assert(fs.existsSync(path.join(sub, '.git')));
+    assert.strictEqual(R.isRepo(sub), true);
+    assert(R.state(sub).hasCommits && G(sub, 'rev-parse', '--show-toplevel') === fs.realpathSync(sub));
+  });
+
+  test('conflict file names are not quoted', () => {
+    const d = mk('uni'); const base = R.state(d).branch;
+    fs.writeFileSync(path.join(d, 'café x.txt'), 'a\n'); G(d, 'add', '-A'); G(d, 'commit', '-m', 'u');
+    R.createBranch(d, 'office/uj', base); G(d, 'checkout', '-q', '-b', 'side');
+    const w1 = W('uw1'), w2 = W('uw2');
+    R.addWorktree(d, w1, 'office/u1', 'office/uj', root); R.addWorktree(d, w2, 'office/u2', 'office/uj', root);
+    fs.writeFileSync(path.join(w1, 'café x.txt'), '1\n'); R.commitAll(w1, '1');
+    fs.writeFileSync(path.join(w2, 'café x.txt'), '2\n'); R.commitAll(w2, '2');
+    assert(R.merge(d, 'office/uj', 'office/u1').ok);
+    assert.deepStrictEqual(R.merge(d, 'office/uj', 'office/u2').files, ['café x.txt']);
   });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
