@@ -35,14 +35,15 @@ const managerCmds = (pa) => (Array.isArray(pa && pa.commands) ? pa.commands : []
 // Never, whatever is ticked: these lose work, publish, or open a door. The boss runs them.
 const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 'git filter-branch', 'git branch -D', 'git checkout --', 'git restore .',
   'php artisan migrate:fresh', 'php artisan migrate:reset', 'php artisan migrate:refresh', 'php artisan db:wipe', 'php artisan tinker', 'php artisan down',
-  'npm publish', 'composer remove',
+  'npm publish', 'composer remove', 'yarn global',
   'pnpm publish', 'pnpm dlx', 'pnpm exec', 'yarn publish', 'yarn npm publish', 'yarn dlx', 'yarn exec', 'cargo publish', 'cargo install', 'cargo run',
   'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
 // Flags that make an allowed command run any program or delete a folder anywhere, or move it outside the allowed
 // folders (MOVE_FLAGS): refused whatever allowed the command. Case matters (go test -c is fine).
 const DENY_FLAGS = { go: ['-exec', '-toolexec', '-vettool', '-C'], cargo: ['--config', '--manifest-path', '-C'], pytest: ['--basetemp'], python: ['--basetemp'], python3: ['--basetemp'],
-  yarn: ['--cwd'], pnpm: ['-C', '--dir'], npm: ['--prefix'] };
-const MOVE_FLAGS = ['-C', '--manifest-path', '--cwd', '--dir', '--prefix'];
+  yarn: ['--cwd'], pnpm: ['-C', '--dir', '-g', '--global'], npm: ['--prefix', '-C', '-g', '--global', '--location'] };
+const MOVE_FLAGS = ['-C', '--manifest-path', '--cwd', '--dir', '--prefix', '-g', '--global', '--location'];
+const GLOBAL_FLAGS = ['-g', '--global', '--location']; // install outside the project
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
 
@@ -95,8 +96,10 @@ function decide(input, office, opts = {}) {
   }
   for (const p of parts) {
     const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); // as the shell reads it: quotes and backslashes vanish
-    const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && /^-/.test(x) && x.replace(/^-+/, '').split('=')[0] === d.replace(/^-+/, '')));
-    if (f) return opts.chat ? { decision: 'deny', reason: MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
+    // npm takes any unambiguous shortening of a long flag (--prefi) and treats words after a bare -- as the script's own
+    const npm = w[0] === 'npm', ws = npm && w.includes('--') ? w.slice(0, w.indexOf('--')) : w, nm = (x) => x.replace(/^-+/, '').split('=')[0];
+    const f = (DENY_FLAGS[w[0]] || []).find((d) => ws.some((x, k) => k && /^-/.test(x) && (nm(x) === nm(d) || (npm && x.startsWith('--') && nm(x).length >= 3 && nm(d).startsWith(nm(x))))));
+    if (f) return opts.chat ? { decision: 'deny', reason: GLOBAL_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: it installs outside the project.` : MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
   }
   // The manager's list needs positive proof: a dashboard chat started as the manager (AI_OFFICE_WHO=pa), no subagent, not in a staff folder.
   const underStaff = P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff';

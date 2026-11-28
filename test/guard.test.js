@@ -7,7 +7,7 @@ const office = {
   linked: ['/home/ali/projects/8fix'],
   staff: [
     { id: 'shah', name: 'Shah', commands: ['git', 'laravel'], customCommands: ['php vendor/bin/pint'] },
-    { id: 'irfan', name: 'Irfan', commands: ['pnpm', 'yarn', 'python', 'go', 'rust', 'github'] },
+    { id: 'irfan', name: 'Irfan', commands: ['pnpm', 'yarn', 'python', 'go', 'rust', 'github', 'node'] },
     { id: 'wide', name: 'Wide', customCommands: ['cargo', 'pnpm', 'yarn', 'go', 'gh'] },
     { id: 'siti', name: 'Siti' },
     { id: 'aina', name: 'Aina', docs: false },
@@ -215,6 +215,14 @@ test('flags that move a command outside the allowed folders are refused; lowerca
   }
   for (const c of ['go test -c ./...', 'npm test', 'npm run build --if-present', 'pnpm install', 'cargo build', 'yarn install']) assert.strictEqual(r(c).decision, 'allow', `${c}: ${r(c).reason}`);
   assert.ok(/"-exec" is not allowed with go: it can run or delete anything\./.test(r('go test -exec x').reason), 'the run-or-delete text stays');
+});
+
+test('npm cannot be pointed outside the folder or install for the whole computer', () => {
+  const o = { agent: 'irfan' };
+  for (const c of ['npm -C /tmp install', 'npm install -C /tmp', 'npm install --prefi /tmp', 'npm install --prefi=/tmp', 'npm install --pref"ix" /tmp',
+    'npm install -g cowsay', 'npm install --global cowsay', 'npm i --glob cowsay', 'npm install --location=global cowsay', 'npm install --loc global x',
+    'pnpm add -g x', 'pnpm install --global', 'yarn global add x']) deny(c, o);
+  for (const c of ['npm install', 'npm install --prefer-offline', 'npm ci', 'npm run build', 'npm test -- --grep prefix', 'npm ls --long', 'pnpm install', 'yarn install']) allow(c, o);
 });
 
 console.log(`\n${n} guard tests passed`);
