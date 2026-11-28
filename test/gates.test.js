@@ -1625,6 +1625,62 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
     const biz = office('pc-biz', 'business'); assert.strictEqual(biz.gates.offerJob('x').ok, false); assert.ok(!fs.existsSync(path.join(biz.dir, '.office', 'pushes.json')));
   });
 
+
+  await test('fix F1: an approval the office recorded (plan, rounds, push) never makes a grant, whatever its file says; a plain one still does', async () => {
+    const { e, job } = await pushCase('p10'); e.gates.offerJob(job);
+    const staff = e.staff[0], w = (...x) => path.join(e.dir, ...x), grants = w('.office', 'grants.json');
+    const mk = (kind, ref) => O.addApproval(e.dir, { from: 'Office', action: `${kind} card`, kind, ref }, { office: true });
+    const plan = mk('plan', 'pj'), rounds = mk('rounds', 'fake-task'), pushA = pending(e)[0];
+    const jr = JSON.parse(fs.readFileSync(w('.office', 'jobs.json'), 'utf8')); jr.pj.planApproval = plan.id; fs.writeFileSync(w('.office', 'jobs.json'), JSON.stringify(jr));
+    const gr = JSON.parse(fs.readFileSync(w('.office', 'gates.json'), 'utf8')); gr['fake-task'] = { roundsApproval: rounds.id }; fs.writeFileSync(w('.office', 'gates.json'), JSON.stringify(gr));
+    for (const [a, dec] of [[plan, 'approved'], [rounds, 'accept'], [pushA, 'approved']]) {
+      const f = w('approvals', `${a.id}.md`);
+      fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('from: Office', `from: ${staff}\ntool: send_quotation_email\ninput: {"id":"Q1"}`));
+      O.decideApproval(e.dir, a.id, dec);
+      assert.ok(!fs.existsSync(grants), `${a.kind}: no grant`);
+    }
+    const plain = O.addApproval(e.dir, { from: staff, action: 'Send it', tool: 'send_quotation_email', input: '{"id":"Q1"}' });
+    O.decideApproval(e.dir, plain.id, 'approved'); assert.ok(fs.existsSync(grants), 'a staff request still gets its grant');
+  });
+
+  await test('fix F3: a second push address added after the card: shown, and nothing is pushed; two addresses from the start are both shown', async () => {
+    const { e, d, bare, job } = await pushCase('p11'); const other = bareOf('pcbare-p11b', mkRepo('pcrepo-p11b'));
+    git(d, 'config', 'remote.origin.pushurl', bare);
+    e.gates.offerJob(job); const [a] = pending(e);
+    assert.strictEqual(e.gates.pushRec('pj').targets.length, 1);
+    git(d, 'config', '--add', 'remote.origin.pushurl', other);
+    const text = e.gates.pushCard('pj').details; assert.ok(text.includes(`Pushes to: ${bare}`) && text.includes(`Pushes to: ${other}`), text); assert.match(text, /push address changed/);
+    const before = [remoteBranches(bare), remoteBranches(other)];
+    assert.strictEqual((await e.gates.decidePush('pj', a.id, 'approved').done).ok, false);
+    assert.deepStrictEqual([remoteBranches(bare), remoteBranches(other)], before);
+    assert.match(jobText(e, 'pj'), /The push address changed after the approval was created\. Nothing was pushed\./);
+    const again = e.gates.askPush('pj'); assert.strictEqual(e.gates.pushRec('pj').targets.length, 2);
+    assert.strictEqual((await e.gates.decidePush('pj', again.approval, 'approved').done).ok, true);
+    assert.ok(remoteBranches(bare).includes('office/pj') && remoteBranches(other).includes('office/pj'), 'both addresses, as shown');
+    const rec = JSON.stringify(e.gates.pushRec('pj')); assert.ok(!rec.includes(require('crypto').createHash('sha256').update(bare).digest('hex')), 'the address hash is keyed');
+  });
+
+  await test('fix F5: origin removed while a card waits: Approve pushes nothing, says so, and the job can ask again', async () => {
+    const { e, d, bare, job } = await pushCase('p12'); e.gates.offerJob(job); const [a] = pending(e);
+    git(d, 'remote', 'remove', 'origin');
+    assert.match(e.gates.pushCard('pj').details, /There is no remote named origin any more\. Approving will push nothing\./);
+    assert.strictEqual((await e.gates.decidePush('pj', a.id, 'approved').done).ok, false);
+    assert.match(jobText(e, 'pj'), /## Push\n\nNo remote named origin: the branch office\/pj is in the project folder\.\n/);
+    assert.strictEqual(e.gates.pushRec('pj').state, 'noremote');
+    git(d, 'remote', 'add', 'origin', bare); assert.strictEqual(e.gates.askPush('pj').ok, true);
+  });
+
+  await test('fix F6: a damaged push record makes no second card and no push; the card works again when the record is back', async () => {
+    const { e, bare, job } = await pushCase('p13'); e.gates.offerJob(job); const [a] = pending(e);
+    const f = path.join(e.dir, '.office', 'pushes.json'), good = fs.readFileSync(f, 'utf8'), count = () => fs.readdirSync(path.join(e.dir, 'approvals')).length, n0 = count();
+    fs.writeFileSync(f, '{ not json');
+    assert.strictEqual(e.gates.offerJob(job).ok, false); assert.strictEqual(e.gates.askPush('pj').ok, false); e.gates.pushCards(); assert.strictEqual(count(), n0, 'no second card');
+    assert.throws(() => e.gates.decidePush('pj', a.id, 'approved'), /no longer waiting/); assert.ok(!remoteBranches(bare).includes('office/pj'));
+    assert.strictEqual(fs.readFileSync(f, 'utf8'), '{ not json', 'the damaged file is left as it is');
+    fs.writeFileSync(f, good); assert.strictEqual(e.gates.offerJob(job).approval, a.id);
+    assert.strictEqual((await e.gates.decidePush('pj', a.id, 'approved').done).ok, true);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} gates tests passed`);
 })().catch((e) => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* left */ } console.error(e); process.exit(1); });

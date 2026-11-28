@@ -580,7 +580,7 @@ if (process.exitCode) console.log('\nrepo tests FAILED'); else console.log(`\n${
   const bin = path.join(tmp2, 'bin'); fs.mkdirSync(bin);
   const seen = path.join(tmp2, 'ssh-seen.json');
   // a fake ssh: records how it was started, then waits (SLOWSSH seconds) and fails
-  fs.writeFileSync(path.join(bin, 'ssh'), `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2), env: { GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT, GIT_ASKPASS: process.env.GIT_ASKPASS, SSH_ASKPASS: process.env.SSH_ASKPASS, SSH_ASKPASS_REQUIRE: process.env.SSH_ASKPASS_REQUIRE, GCM_INTERACTIVE: process.env.GCM_INTERACTIVE } }));\nsetTimeout(() => { process.stderr.write('fake ssh: no route\\n'); process.exit(255); }, Number(process.env.SLOWSSH || 0) * 1000);\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'ssh'), `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2), env: { GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT, GIT_ASKPASS: process.env.GIT_ASKPASS, SSH_ASKPASS: process.env.SSH_ASKPASS, SSH_ASKPASS_REQUIRE: process.env.SSH_ASKPASS_REQUIRE, GCM_INTERACTIVE: process.env.GCM_INTERACTIVE } }));\nsetTimeout(() => { if (process.env.MARK) require('fs').writeFileSync(process.env.MARK, 'finished'); process.stderr.write('fake ssh: no route\\n'); process.exit(255); }, Number(process.env.SLOWSSH || 0) * 1000);\n`, { mode: 0o755 });
   const mk2 = (name) => { const d = path.join(tmp2, name); fs.mkdirSync(d); G(d, 'init'); G(d, 'config', 'user.name', 't'); G(d, 'config', 'user.email', 't@t'); fs.writeFileSync(path.join(d, 'a.txt'), 'x\n'); G(d, 'add', '-A'); G(d, 'commit', '-m', 'first'); return d; };
   const ok = (name, fn) => fn().then(() => { n++; console.log(`ok ${n} ${name}`); }, (e) => { n++; console.log(`FAIL ${n} ${name}: ${e.message.split('\n')[0]}`); process.exitCode = 1; });
   try {
@@ -594,6 +594,23 @@ if (process.exitCode) console.log('\nrepo tests FAILED'); else console.log(`\n${
       assert(G(bare, 'branch', '--list', 'office/j')); assert.strictEqual(G(bare, 'branch', '--list'), 'office/j', 'nothing else arrived');
       const nr = mk2('pa-none'); R.createBranch(nr, 'office/j', R.state(nr).branch);
       assert.strictEqual((await R.pushAsync(nr, 'office/j')).ok, false, 'no origin');
+    });
+
+    await ok('push sends one commit to one ref: no tags with followTags, the approved commit even if the branch moved', async () => {
+      const d = mk2('pf'); const base = R.state(d).branch;
+      const bare = path.join(tmp2, 'pf.git'); fs.mkdirSync(bare); G(bare, 'init', '--bare'); G(d, 'remote', 'add', 'origin', bare);
+      R.createBranch(d, 'office/j', base); G(d, 'config', 'push.followTags', 'true'); G(d, 'config', 'push.recurseSubmodules', 'on-demand');
+      G(d, 'tag', '-a', 'v1', '-m', 'v1', base);
+      const sha = G(d, 'rev-parse', 'refs/heads/office/j');
+      G(d, 'tag', '-a', 'v2', '-m', 'v2', 'refs/heads/office/j');
+      assert((await R.pushAsync(d, 'office/j', sha)).ok);
+      assert.strictEqual(G(bare, 'tag', '--list'), '', 'no tag went along');
+      const w = path.join(tmp2, 'pf-wt'); G(d, 'worktree', 'add', '-q', w, 'office/j'); fs.writeFileSync(path.join(w, 'late.txt'), 'x'); G(w, 'add', '-A'); G(w, 'commit', '-m', 'late'); G(d, 'worktree', 'remove', '--force', w);
+      const late = G(d, 'rev-parse', 'refs/heads/office/j'); assert.notStrictEqual(late, sha);
+      assert(R.push(d, 'office/j', sha).ok);
+      assert.strictEqual(G(bare, 'rev-parse', 'office/j'), sha, 'the approved commit arrived');
+      assert.strictEqual(R.push(d, 'office/j', 'not a sha; rm').ok, false);
+      assert.strictEqual(G(bare, 'tag', '--list'), '');
     });
     if (process.platform === 'win32') console.log('  (skip: the fake ssh needs a shell script)');
     else {
@@ -613,6 +630,17 @@ if (process.exitCode) console.log('\nrepo tests FAILED'); else console.log(`\n${
           process.env.SLOWSSH = '0';
           const f = await R.pushAsync(d, 'office/j'); assert.strictEqual(f.ok, false); assert.match(f.err, /fake ssh: no route/);
         } finally { process.env.PATH = oldPath; delete process.env.SLOWSSH; }
+      });
+
+      await ok('a push that timed out is killed with its children: the slow ssh cannot finish it later', async () => {
+        const d = mk2('pk'); R.createBranch(d, 'office/j', R.state(d).branch);
+        G(d, 'remote', 'add', 'origin', 'ssh://git@example.invalid/x/y.git');
+        const mark = path.join(tmp2, 'late-mark'), oldPath = process.env.PATH; process.env.PATH = `${bin}${path.delimiter}${oldPath}`; process.env.SLOWSSH = '2'; process.env.MARK = mark;
+        try {
+          const r = await R.pushAsync(d, 'office/j', { timeoutMs: 500 }); assert.strictEqual(r.ok, false); assert.match(r.err, /took longer than 1 second and was stopped/);
+          await new Promise((res) => setTimeout(res, 3000));
+          assert.ok(!fs.existsSync(mark), 'the leftover ssh was killed');
+        } finally { process.env.PATH = oldPath; delete process.env.SLOWSSH; delete process.env.MARK; }
       });
     }
   } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
