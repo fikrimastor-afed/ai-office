@@ -1,6 +1,6 @@
 // Command guard: who may run what, where. This is a safety boundary, so test it hard.
 const assert = require('assert');
-const { decide, decideAction, ASK_FIRST, PRESETS } = require('../office-files/guard');
+const { decide, decideAction, ASK_FIRST, PRESETS, autoOn } = require('../office-files/guard');
 
 const office = {
   dir: '/home/ali/office',
@@ -11,6 +11,8 @@ const office = {
     { id: 'wide', name: 'Wide', customCommands: ['cargo', 'pnpm', 'yarn', 'go', 'gh'] },
     { id: 'siti', name: 'Siti' },
     { id: 'aina', name: 'Aina', docs: false },
+    { id: 'wei', name: 'Wei Jie', commandMode: 'auto' },
+    { id: 'priya', name: 'Priya', commands: ['git'], commandMode: 'auto' },
   ],
 };
 const run = (command, o = {}) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: o.agent ?? 'shah', cwd: o.cwd || office.dir }, office, { chat: o.chat ?? true, win: false });
@@ -232,6 +234,39 @@ test('npm and pnpm: combined and shortened flags cannot go global or move the fo
   for (const c of ['npm install --legacy-peer-deps', 'npm install --save-dev x', 'npm install --save-exact x', 'npm install --prefer-offline', 'npm ls --long', 'npm install -D x', 'npm install -E x',
     'npm install --no-global', 'npm run build --if-present', 'npm ci --silent', 'npm install -s', 'npm install -d', 'npm install -f', 'npm install --force', 'npm ci --ci',
     'npm test -- -g pattern', 'npm test -- -gf', 'pnpm install --frozen-lockfile']) allow(c, o);
+});
+
+test('auto staff: the guard gives no decision on an unlisted command, and still refuses the never-list', () => {
+  const r = (c, o = {}) => run(c, { agent: 'wei', ...o });
+  const none = (c, o) => { const x = r(c, o); assert.strictEqual(x.decision, null, `no decision: ${c} (${x.reason})`); };
+  for (const c of ['make test', 'ls -la', 'cd /home/ali/projects/8fix && ./gradlew build', 'node -e "1"', 'docker compose up -d', 'git -C /home/ali/projects/8fix describe --always']) none(c);
+  for (const c of ['git push', 'git push origin main', 'git -C /home/ali/projects/8fix push', 'cd /home/ali/projects/8fix && git reset --hard HEAD~1', 'go test --exec sh', 'npm publish',
+    'npm install -g x', 'ls | cat', 'echo $(whoami)', 'make test; rm -rf x', 'rm -rf build', 'curl http://x', 'cd /etc && ls', 'git -C /etc status', 'cd /home/ali/projects/8fix && cd .. && ls'])
+    assert.strictEqual(r(c).decision, 'deny', c);
+  assert.strictEqual(run('git status', { agent: 'priya' }).decision, 'allow');          // ticked: allowed outright
+  assert.strictEqual(run('make test', { agent: 'priya' }).decision, null);
+  assert.strictEqual(run('git status && make test', { agent: 'priya' }).decision, null); // one part unlisted: the whole line has no decision
+  assert.strictEqual(run('git status && git push', { agent: 'priya' }).decision, 'deny'); // a refused part still wins
+  assert.strictEqual(run('make test && git -C /etc status', { agent: 'priya' }).decision, 'deny');
+});
+
+test('auto is one staff\'s setting: nobody else gains anything, and only the exact value counts', () => {
+  deny('make test', { agent: 'siti' });                                                   // listed staff, as today
+  deny('make test', { agent: 'general-purpose' });
+  assert.strictEqual(decide({ tool_name: 'Bash', tool_input: { command: 'make test' }, cwd: office.dir }, office, { chat: true, win: false }).decision, 'deny');   // the manager
+  assert.strictEqual(decide({ tool_name: 'Bash', tool_input: { command: 'make test' }, cwd: '/home/ali/office/staff/ghost' }, office, { chat: true, win: false }).decision, 'deny');
+  for (const v of ['AUTO', true, 'listed ', 1, {}]) {
+    const o2 = { ...office, staff: office.staff.map((s) => (s.id === 'wei' ? { ...s, commandMode: v } : s)) };
+    assert.strictEqual(decide({ tool_name: 'Bash', tool_input: { command: 'make test' }, agent_type: 'wei', cwd: o2.dir }, o2, { chat: true, win: false }).decision, 'deny', String(v));
+  }
+  assert.strictEqual(run('make test', { agent: 'wei', chat: false }).decision, null);     // terminal: as today
+  assert.strictEqual(autoOn({ commandMode: 'auto' }), true);
+  for (const v of [undefined, null, {}, { commandMode: 'listed' }, { commandMode: 'AUTO' }, { commandMode: true }]) assert.strictEqual(autoOn(v), false);
+});
+
+test('pnpm one-letter flags run together: -r, -i and -F count with -g', () => {   // the letter set is the one-letter shorthands pnpm and npm read
+  for (const c of ['pnpm i -rg x', 'pnpm i -ig x', 'pnpm install -Fg']) deny(c, { agent: 'irfan' });
+  for (const c of ['pnpm install -r', 'pnpm install -F app']) allow(c, { agent: 'irfan' });
 });
 
 console.log(`\n${n} guard tests passed`);

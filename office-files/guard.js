@@ -47,11 +47,13 @@ const GLOBAL_FLAGS = ['-g', '-L', '--global', '--location']; // install outside 
 
 // Does word x (a flag as typed) mean the listed flag d? Same name, or for npm and pnpm (they read flags loosely): a long
 // flag shortened (--prefi, -prefi) or one-letter flags run together (-sg, -gf, --gl) that include d's letter.
+// The one-letter flags that can run together: npm's shorthands; pnpm also has r, i and F.
+const SHORT = { npm: 'dqsnacfglmpCSBDEOPHhvwyL', pnpm: 'dqsnacfglmpCSBDEOPHhvwyLriF' };
 const flagHit = (first, x, d) => {
   const nm = (v) => v.replace(/^-+/, '').split('=')[0], n = nm(x), dn = nm(d);
   if (n === dn) return true;
   if (first !== 'npm' && first !== 'pnpm') return false;
-  return dn.length === 1 ? /^[dqsnacfglmpCSBDEOPHhvwyL]+$/.test(n) && n.includes(dn) : n.length >= 3 && dn.startsWith(n);
+  return dn.length === 1 ? new RegExp(`^[${SHORT[first]}]+$`).test(n) && n.includes(dn) : n.length >= 3 && dn.startsWith(n);
 };
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
@@ -85,6 +87,8 @@ function splitCommand(cmd) {
 }
 const firstWord = (s) => { const m = /^("[^"]*"|'[^']*'|\S+)\s*([\s\S]*)$/.exec(s); return m ? [m[1], m[2]] : [s, '']; };
 
+const autoOn = (s) => !!s && s.commandMode === 'auto';
+
 // input: Claude Code's hook input. office: office.json plus { dir, linked: [paths] }.
 // Returns { decision: 'allow' | 'deny' | null, reason }.
 function decide(input, office, opts = {}) {
@@ -94,8 +98,11 @@ function decide(input, office, opts = {}) {
   const staffId = input.agent_type || ((P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff') ? P.relative(office.dir, input.cwd).split(/[\\/]/)[1] : '');
   const staff = (office.staff || []).find((s) => s.id === staffId);
   const name = staff ? staff.name : 'The PA';
+  const auto = !!opts.chat && autoOn(staff); // a staff on Auto: a command not on the list goes to Claude's own check
+  let undecided = false;
   const no = (reason) => ({ decision: opts.chat ? 'deny' : null, reason });
 
+  // The never-list stays for Auto too: Claude's own auto mode check allows a push, so this guard refuses it.
   // one plain command, or "cd <folder> && command && command" - nothing else
   const parts = cmd ? splitCommand(cmd) : null;
   if (!parts) return no('Only plain commands can run here (no ; | $ ` > < & or similar outside quotes).');
@@ -114,7 +121,7 @@ function decide(input, office, opts = {}) {
   const mgr = !staff && opts.chat && opts.who === 'pa' && !input.agent_type && !underStaff ? managerCmds(office.pa) : [];
   if (!staff && !mgr.length) return no(`${name} does not run commands. Hand it to a staff who has commands turned on (Staff page).`);
   const allowed = staff ? [...cmdsOf(staff).flatMap((k) => (PRESETS[k] ? PRESETS[k].allow : [])), ...(staff.customCommands || [])] : mgr.flatMap((k) => PRESETS[k].allow);
-  if (!allowed.length) return no(`${name} has no commands turned on. The boss can tick them on the Staff page.`);
+  if (!allowed.length && !auto) return no(`${name} has no commands turned on. The boss can tick them on the Staff page.`);
 
   const norm = (d) => (win ? P.resolve(d).toLowerCase() : P.resolve(d)); // Windows paths ignore case
   const places = [office.dir, ...(office.linked || [])].map(norm);
@@ -136,16 +143,20 @@ function decide(input, office, opts = {}) {
       p = `git ${rest}`;
       for (const d of ALWAYS_DENY) if (starts(p, d.trim())) return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
     }
-    if (!allowed.some((a) => starts(p, a))) return no(!staff ? 'The manager can only look things up on GitHub (gh issue view, gh pr view and similar). Hand other command work to a staff.' : `"${p.split(/\s+/).slice(0, 3).join(' ')}" is not on ${name}'s allowed commands. The boss can add it on the Staff page.`);
+    if (!allowed.some((a) => starts(p, a))) {
+      if (auto) { undecided = true; continue; }
+      return no(!staff ? 'The manager can only look things up on GitHub (gh issue view, gh pr view and similar). Hand other command work to a staff.' : `"${p.split(/\s+/).slice(0, 3).join(' ')}" is not on ${name}'s allowed commands. The boss can add it on the Staff page.`);
+    }
     // Office documents: node only on a script file saved in the office or a linked folder (no -e, no outside scripts)
     if (starts(p, 'node') && !(staff.customCommands || []).some((c) => starts(p, c))) {
       const [file] = firstWord(p.slice(4).trim());
       if (!file || file.startsWith('-') || !/\.(c?js|mjs)["']?$/i.test(file) || !inside(realPath(file, input.cwd || office.dir, win))) {
+        if (auto) { undecided = true; continue; }
         return no(`${name} may run node only on a script saved in the office or a linked folder, like: node "projects/<project>/make-deck.cjs".`);
       }
     }
   }
-  return { decision: 'allow', reason: `on ${name}'s allowed commands` };
+  return undecided ? { decision: null, reason: 'auto mode decides' } : { decision: 'allow', reason: `on ${name}'s allowed commands` };
 }
 
 // Add-on actions that leave the office. Each needs the boss's OK, unless he set it to "Always allow".
@@ -194,7 +205,7 @@ function useGrant(dir, id, when = new Date().toISOString()) {
   } catch { /* approval file gone: the grant is what counts */ }
 }
 
-module.exports = { PRESETS, MANAGER_PRESETS, managerCmds, ALWAYS_DENY, ASK_FIRST, cmdsOf, decide, decideAction, sameInput };
+module.exports = { PRESETS, MANAGER_PRESETS, managerCmds, ALWAYS_DENY, ASK_FIRST, cmdsOf, autoOn, decide, decideAction, sameInput };
 
 if (require.main === module) {
   let raw = '';
