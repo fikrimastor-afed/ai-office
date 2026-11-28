@@ -203,4 +203,18 @@ test('the manager list needs the manager\'s own dashboard chat; a bad pa.command
   }
 });
 
+test('flags that move a command outside the allowed folders are refused; lowercase -c and plain commands stay allowed', () => {
+  const eng = { ...office, staff: [{ id: 'eng', name: 'Eng', commands: ['node', 'pnpm', 'yarn', 'go', 'rust'] }] };
+  const r = (command) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: 'eng', cwd: eng.dir }, eng, { chat: true, win: false });
+  for (const [c, flag, w] of [['go build -C /tmp ./...', '-C', 'go'], ['go test -C=/tmp ./...', '-C', 'go'], ['cargo build --manifest-path /tmp/x/Cargo.toml', '--manifest-path', 'cargo'],
+    ['cargo test -C /tmp', '-C', 'cargo'], ['yarn install --cwd /tmp', '--cwd', 'yarn'], ['pnpm install -C /tmp', '-C', 'pnpm'], ['pnpm run build --dir=/tmp', '--dir', 'pnpm'],
+    ['npm install --prefix /tmp', '--prefix', 'npm'], ['cd /home/ali/projects/8fix && npm run build --prefix=/tmp', '--prefix', 'npm']]) {
+    const d = r(c);
+    assert.strictEqual(d.decision, 'deny', c);
+    assert.strictEqual(d.reason, `"${flag}" is not allowed with ${w}: use cd "<folder>" && first.`, c);
+  }
+  for (const c of ['go test -c ./...', 'npm test', 'npm run build --if-present', 'pnpm install', 'cargo build', 'yarn install']) assert.strictEqual(r(c).decision, 'allow', `${c}: ${r(c).reason}`);
+  assert.ok(/"-exec" is not allowed with go: it can run or delete anything\./.test(r('go test -exec x').reason), 'the run-or-delete text stays');
+});
+
 console.log(`\n${n} guard tests passed`);

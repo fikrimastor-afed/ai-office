@@ -38,8 +38,11 @@ const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 
   'npm publish', 'composer remove',
   'pnpm publish', 'pnpm dlx', 'pnpm exec', 'yarn publish', 'yarn npm publish', 'yarn dlx', 'yarn exec', 'cargo publish', 'cargo install', 'cargo run',
   'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
-// Flags that make an allowed command run any program or delete a folder anywhere: refused whatever allowed the command.
-const DENY_FLAGS = { go: ['-exec', '-toolexec', '-vettool'], cargo: ['--config'], pytest: ['--basetemp'], python: ['--basetemp'], python3: ['--basetemp'] };
+// Flags that make an allowed command run any program or delete a folder anywhere, or move it outside the allowed
+// folders (MOVE_FLAGS): refused whatever allowed the command. Case matters (go test -c is fine).
+const DENY_FLAGS = { go: ['-exec', '-toolexec', '-vettool', '-C'], cargo: ['--config', '--manifest-path', '-C'], pytest: ['--basetemp'], python: ['--basetemp'], python3: ['--basetemp'],
+  yarn: ['--cwd'], pnpm: ['-C', '--dir'], npm: ['--prefix'] };
+const MOVE_FLAGS = ['-C', '--manifest-path', '--cwd', '--dir', '--prefix'];
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
 
@@ -93,7 +96,7 @@ function decide(input, office, opts = {}) {
   for (const p of parts) {
     const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); // as the shell reads it: quotes and backslashes vanish
     const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && /^-/.test(x) && x.replace(/^-+/, '').split('=')[0] === d.replace(/^-+/, '')));
-    if (f) return opts.chat ? { decision: 'deny', reason: `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
+    if (f) return opts.chat ? { decision: 'deny', reason: MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
   }
   // The manager's list needs positive proof: a dashboard chat started as the manager (AI_OFFICE_WHO=pa), no subagent, not in a staff folder.
   const underStaff = P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff';
