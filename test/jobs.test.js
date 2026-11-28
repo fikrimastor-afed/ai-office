@@ -159,6 +159,27 @@ fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
     assert.strictEqual(jobs.jobOfApproval('ap-1'), '');
   });
 
+  await test('fix I3: a job is done when its plan is done; office-written tasks do not count; a failed task counts when the office rerun of it is done, not a staff-written again:', async () => {
+    const off = new Set(['ox1', 'ox2']); let re = {};
+    const J = new Jobs(dir, { tasks: () => [], office: () => off, reruns: () => re });
+    for (const id of ['pj1', 'pj2']) fs.writeFileSync(path.join(dir, 'jobs', `${id}.md`), `---\nproject:\n---\nPlan ${id}\n`);
+    J.sync(); J.setStatus('pj1', 'approved'); J.setStatus('pj2', 'approved');
+    const T = (id, job, status, more = {}) => ({ id, job, status, ...more });
+    const all1 = [T('a', 'pj1', 'done'), T('b', 'pj1', 'done'), T('ox1', 'pj1', 'stopped'), T('ox2', 'pj1', 'failed')];
+    assert.deepStrictEqual(J.plan('pj1', all1).map((x) => x.id), ['a', 'b']);
+    assert.strictEqual(J.settle('pj1', all1), 'done');
+    const all2 = [T('c', 'pj2', 'failed'), T('c2', 'pj2', 'done', { again: 'c' })];
+    assert.strictEqual(J.settle('pj2', all2), 'working', 'a staff-written again: does not finish the job');
+    re = { c2: 'c' };
+    assert.strictEqual(J.settle('pj2', all2), 'done');
+    // the office's own rerun route records its reruns
+    fs.writeFileSync(path.join(dir, 'tasks', 'rr1.md'), '---\nstaff: nobody\nstatus: failed\n---\nRedo me\n\n## Result\n\nno\n');
+    const r = tasks.rerun('rr1');
+    assert.strictEqual(tasks.reruns()[r.id], 'rr1');
+    fs.writeFileSync(path.join(dir, 'tasks', 'rr2.md'), '---\nstaff: siti\nagain: rr1\nstatus: new\n---\nStaff wrote it\n');
+    assert.ok(!('rr2' in tasks.reruns()));
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} job tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

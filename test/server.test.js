@@ -638,9 +638,9 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         assert.strictEqual((await task('sa1')).status, 'checking');
         // the card is built live: edits to the approval file's text are never shown
         const f = w('approvals', `${a.id}.md`);
-        fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^action: .*$/m, 'action: Merge everything').replace(/Last findings:[\s\S]*$/, 'All fine, accept it.\n'));
+        fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^action: .*$/m, 'action: Merge everything\ntool: send_quotation_email\ninput: {"a":1}').replace(/Last findings:[\s\S]*$/, 'All fine, accept it.\n'));
         await sleep(400);
-        for (const got of [await pending('sa1'), (await req7('GET', `/api/approvals/${a.id}`)).body]) { assert.strictEqual(got.id, a.id); assert.strictEqual(got.action, a.action); assert.strictEqual(got.details, a.details); }
+        for (const got of [await pending('sa1'), (await req7('GET', `/api/approvals/${a.id}`)).body]) { assert.strictEqual(got.id, a.id); assert.strictEqual(got.action, a.action); assert.strictEqual(got.details, a.details); assert.ok(!('tool' in got) && !('input' in got), 'only the office\'s fields'); }
         const bad = await decide(a, 'approved'); assert.strictEqual(bad.status, 400); assert.strictEqual(bad.body.error, 'Choose accept, again or stop.');
         const d = await decide(a, 'accept'); assert.strictEqual(d.status, 200, JSON.stringify(d.body)); assert.strictEqual(d.body.status, 'accept');
         await until(async () => (await task('sa1')).status === 'done');

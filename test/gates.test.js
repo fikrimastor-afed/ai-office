@@ -100,7 +100,7 @@ const show = (d, ref) => { const r = spawnSync('git', ['show', ref], { cwd: d, e
 function engine(dir, extra = {}, gopts = {}) {
   const loadCfg = () => JSON.parse(fs.readFileSync(path.join(dir, 'office.json'), 'utf8'));
   const e = { dir, said: [], ended: [], seen: [], offices: [] };
-  e.jobs = new Jobs(dir, { tasks: () => e.tasks.list(), onChange: (j) => { if (j.status === 'approved') e.gates.jobApproved(j.id); } });
+  e.jobs = new Jobs(dir, { tasks: () => e.tasks.list(), office: () => e.gates.served(), reruns: () => e.tasks.reruns(), onChange: (j) => { if (j.status === 'approved') e.gates.jobApproved(j.id); } });
   e.gates = new Gates({ dir, loadCfg, jobOf: (id) => e.jobs.get(id), say: (t) => e.said.push(t), ...gopts });
   e.tasks = new Tasks(dir, {
     access: (id, o) => access(dir, id, o), claude: resolveClaude, env: chatEnv, loadCfg,
@@ -984,7 +984,8 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
     assert.strictEqual(rs.length, 1, 'exactly one review task');
     const rt = rs[0];
     assert.deepStrictEqual([rt.role, rt.from, rt.job, rt.project, rt.staff, rt.status], ['Reviewer', 'pa', 'rj1', pr, hakim, 'done']);
-    assert.strictEqual(rt.task, `Review task rv1 ("REVIEW pass one") by Irfan. Branch office/rv1, in ${wt}. See the change with git -C "${wt}" diff office/rj1...HEAD (or log -p). Read the diff, not just the summary. Start your report with VERDICT: pass or VERDICT: changes, then your findings with file and line. Do not edit anything.`);
+    const sha = regR(rev, 'rv1').reviewedSha; assert.strictEqual(git(rr, 'rev-parse', 'office/rv1'), sha);
+    assert.strictEqual(rt.task, `Review task rv1 ("REVIEW pass one") by Irfan. Branch office/rv1, in ${wt}. Review exactly this commit: ${sha}. See the change with git -C "${wt}" diff office/rj1...${sha} (or log -p). Read the diff, not just the summary. Start your report with VERDICT: pass or VERDICT: changes, then your findings with file and line. Do not edit anything.`);
     assert.strictEqual(regR(rev, 'rv1').reviewTask, rt.id);
     assert.ok(t.result.endsWith('Review: passed (Hakim).\nTests: none set for this project.\nBranch: office/rj1.'), t.result);
     assert.strictEqual(show(rr, 'office/rj1:p.txt'), 'p');
@@ -1190,6 +1191,151 @@ const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && O
       const a = O.listApprovals(sh.dir).find((x) => x.kind === 'rounds' && x.ref === 'sc1');
       O.decideApproval(sh.dir, a.id, 'stop'); sh.gates.decided('sc1', 'stop');
       await until(() => ended(sh, 'sc1'));
+    });
+  }
+
+  // ---- fix round 1 of the review gate
+  const freeze = (e) => { e.tasks.scan = () => {}; e.tasks.finish = () => {}; e.tasks.check = () => {}; for (const x of e.tasks.running.values()) if (x.child) try { x.child.kill('SIGKILL'); } catch { /* gone */ } };
+  const restart = (e) => { freeze(e); const e2 = engine(e.dir); e2.tasks.recover(); e2.gates.recover(); e2.tasks.scan(); return e2; }; // the office died and started again
+  const revOffice = (name) => { const e = office(name, 'software', undefined, 5), d = mkRepo(`repo-${name}`); return { e, d, p: project(e, `P ${name}`, d), ir: sid(e, 'Irfan'), hk: sid(e, 'Hakim'), wj: sid(e, 'Wei Jie') }; };
+  const jt = (o, id, job, text) => { o.e.put(id, `staff: ${o.ir}\nproject: ${o.p}\njob: ${job}\nkind: code`, text); o.e.job(job, o.p); o.e.jobs.setStatus(job, 'approved'); o.e.tasks.scan(); };
+  const editReviewer = (e, rid, staff) => { const f = path.join(e.dir, 'tasks', `${rid}.md`); fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^role: .*\n/m, '').replace(/^staff:.*$/m, `staff: ${staff}`)); };
+  const reviewRuns = (id) => calls().filter((c) => c.msg.includes('Start your report with VERDICT') && c.msg.includes(`Review task ${id} `));
+  const busy = (o, id) => { o.e.put(id, `staff: ${o.hk}`, 'Busy LONG'); o.e.tasks.scan(); };
+
+  await test('fix I1: a review task edited to the author or to a non-reviewer is never run as them; the real reviewer runs it (no restart)', async () => {
+    const o = revOffice('i1');
+    for (const [id, to] of [['i1a', o.ir], ['i1b', o.wj]]) {
+      busy(o, `${id}-busy`);
+      await until(() => o.e.status(`${id}-busy`) === 'working');
+      jt(o, id, `${id}j`, `REVIEW pass ${id}\nWRITE ${id}.txt x`);
+      await until(() => regR(o.e, id).reviewTask);
+      editReviewer(o.e, regR(o.e, id).reviewTask, to); o.e.tasks.scan(); // the server's file watch scans after a change
+      await until(() => ended(o.e, id));
+      const t = o.e.tasks.read(id);
+      assert.strictEqual(t.status, 'done', t.result); assert.ok(t.result.includes('Review: passed (Hakim).'), t.result);
+      assert.ok(reviewRuns(id).length >= 1 && reviewRuns(id).every((c) => c.cwd === path.join(o.e.dir, 'staff', o.hk)), 'only Hakim ran the review');
+      assert.strictEqual(show(o.d, `office/${id}j:${id}.txt`), 'x');
+    }
+  });
+
+  await test('fix I1: edited to the author, then the office restarts: the author never runs it; the reviewer passes it; a run as the author would not count', async () => {
+    const o = revOffice('i1r');
+    busy(o, 'r-busy'); await until(() => o.e.status('r-busy') === 'working');
+    jt(o, 'i1r', 'i1rj', 'REVIEW pass restart\nWRITE r.txt r');
+    await until(() => regR(o.e, 'i1r').reviewTask);
+    editReviewer(o.e, regR(o.e, 'i1r').reviewTask, o.ir);
+    const e2 = restart(o.e);
+    await until(() => ended(e2, 'i1r'));
+    const t = e2.tasks.read('i1r');
+    assert.strictEqual(t.status, 'done', t.result); assert.ok(t.result.includes('Review: passed (Hakim).'), t.result);
+    assert.ok(reviewRuns('i1r').every((c) => c.cwd === path.join(o.e.dir, 'staff', o.hk)), 'the author never ran the review');
+    // (a) the run is judged by who the engine ran it as
+    const r = regR(e2, 'i1r'); e2.gates.setRec('i1r', { ...r, reviewTask: 'x-review' });
+    e2.gates.reviewEnded('i1r', 'x-review', 'done', 'VERDICT: pass', 'Irfan', o.ir); assert.strictEqual(regR(e2, 'i1r').verdict.status, 'refused');
+    e2.gates.reviewEnded('i1r', 'x-review', 'done', 'VERDICT: pass', 'Wei Jie', o.wj); assert.strictEqual(regR(e2, 'i1r').verdict.status, 'refused');
+    e2.gates.reviewEnded('i1r', 'x-review', 'done', 'VERDICT: pass', 'Hakim', o.hk); assert.strictEqual(regR(e2, 'i1r').verdict.status, 'done');
+  });
+
+  await test('fix I2: work written while the review waits is reviewed again on its new commit before it merges', async () => {
+    const o = revOffice('i2');
+    busy(o, 'i2-busy'); await until(() => o.e.status('i2-busy') === 'working');
+    jt(o, 'i2', 'i2j', 'REVIEW pass moved\nWRITE base.txt b');
+    await until(() => regR(o.e, 'i2').reviewTask);
+    const sha1 = regR(o.e, 'i2').reviewedSha, wt = path.join(o.e.dir, 'worktrees', 'i2');
+    assert.ok(reviewsOf(o.e, 'i2')[0].task.includes(`Review exactly this commit: ${sha1}. See the change with git -C "${wt}" diff office/i2j...${sha1} (or log -p).`));
+    fs.writeFileSync(path.join(wt, 'evil.txt'), 'unreviewed\n');
+    await until(() => ended(o.e, 'i2'));
+    const t = o.e.tasks.read('i2'), rs = reviewsOf(o.e, 'i2'), sha2 = regR(o.e, 'i2').reviewedSha;
+    assert.strictEqual(t.status, 'done', t.result);
+    assert.strictEqual(rs.length, 2); assert.notStrictEqual(sha2, sha1);
+    assert.ok(rs[1].task.includes(`Review exactly this commit: ${sha2}.`) && rs[1].task.endsWith('The work changed after it was sent for review.'), rs[1].task);
+    assert.strictEqual(show(o.d, `${sha1}:evil.txt`), null); assert.strictEqual(show(o.d, `${sha2}:evil.txt`), 'unreviewed');
+    assert.strictEqual(git(o.d, 'rev-parse', 'office/i2'), sha2, 'what merged is exactly the reviewed commit');
+    assert.strictEqual(regR(o.e, 'i2').round || 0, 0, 'not a round');
+  });
+
+  await test('fix I2: work that keeps changing during review fails the task after the third change, nothing merged', async () => {
+    const o = revOffice('i2b');
+    jt(o, 'i2b', 'i2bj', 'REVIEW pass SLOWREVIEW moving\nWRITE m0.txt 0');
+    for (let i = 1; i <= 3; i++) {
+      await until(() => { const r = regR(o.e, 'i2b'); return reviewsOf(o.e, 'i2b').length === i && r.reviewTask && o.e.status(r.reviewTask) === 'working'; }, 30000);
+      fs.writeFileSync(path.join(o.e.dir, 'worktrees', 'i2b', `m${i}.txt`), `${i}\n`);
+    }
+    await until(() => ended(o.e, 'i2b'), 30000);
+    const t = o.e.tasks.read('i2b');
+    assert.strictEqual(t.status, 'failed'); assert.ok(t.result.endsWith('The work kept changing while it was being reviewed.'), t.result);
+    assert.strictEqual(show(o.d, 'office/i2bj:m0.txt'), null);
+  });
+
+  await test('fix I3: a job finishes when its plan is done; a stopped review the office replaced does not hold it', async () => {
+    assert.strictEqual(rev.jobs.settle('rjd', rev.tasks.list()) || rev.jobs.get('rjd').status, 'done');
+    assert.ok(rev.tasks.list().filter((x) => x.job === 'rjd').length > 1, 'the job has office-written tasks too');
+    assert.deepStrictEqual(rev.jobs.plan('rjd', rev.tasks.list()).map((x) => x.id), ['rvd']);
+    assert.ok(rev.gates.served().has(reviewsOf(rev, 'rvd')[0].id));
+  });
+
+  await test('fix I4: in a business office a kind: review task keeps its normal tools', async () => {
+    const bz = office('bzr', 'business');
+    bz.put('bzr1', `staff: ${bz.staff[0]}\nkind: review`, 'Review the contract and write notes to notes.md');
+    bz.tasks.scan(); await until(() => ended(bz, 'bzr1'));
+    assert.strictEqual(argOf(callOf('Review the contract and write'), '--tools').split(',').filter((x) => ['Write', 'Edit'].includes(x)).length, 2);
+    assert.ok(!argOf(callOf('Review the contract and write'), '--disallowedTools').split(',').includes('Write'));
+  });
+
+  await test('fix M2: the reviewer leaves the team after asking for changes: the boss decides, with the line', async () => {
+    const f = path.join(rev.dir, 'office.json'), keep = fs.readFileSync(f, 'utf8');
+    jobTask(rev, 'm2', 'm2j', 'REVIEW always-changes m2\nWRITE m2.txt m');
+    await until(() => fixesOf(rev, 'm2').length === 1);
+    const cfg = JSON.parse(keep); cfg.staff = cfg.staff.filter((x) => x.id !== hakim); fs.writeFileSync(f, JSON.stringify(cfg));
+    try {
+      await until(() => regR(rev, 'm2').wait === 'boss', 30000);
+      const c = rev.gates.roundsCard('m2');
+      assert.ok(c.details.includes(`Branch: office/m2.\n\nNo reviewer is on the team any more.\n\nLast findings:\n    src/a.js:3 needs a check`), c.details);
+      assert.strictEqual(rev.status('m2'), 'checking'); assert.strictEqual(show(rr, 'office/m2j:m2.txt'), null);
+      decide(roundsCards(rev, 'm2').find((x) => x.status === 'pending'), 'm2', 'accept');
+      await until(() => ended(rev, 'm2'));
+      assert.ok(rev.tasks.read('m2').result.endsWith('Accepted by the boss without a passing review.\nBranch: office/m2j.'));
+    } finally { fs.writeFileSync(f, keep); }
+  });
+
+  await test('fix M3: a review cut off by a restart is not a try: after it, one stop still gets a fresh review', async () => {
+    const o = revOffice('m3');
+    jt(o, 'm3', 'm3j', 'REVIEW pass SLOWREVIEW cut\nWRITE c.txt c');
+    await until(() => { const r = regR(o.e, 'm3'); return r.reviewTask && o.e.status(r.reviewTask) === 'working'; }, 30000);
+    const e2 = restart(o.e);
+    await until(() => reviewsOf(e2, 'm3').length === 2 && e2.status(regR(e2, 'm3').reviewTask) === 'working', 30000);
+    assert.strictEqual(regR(e2, 'm3').reviewTries, 1);
+    e2.tasks.stop(regR(e2, 'm3').reviewTask);
+    await until(() => ended(e2, 'm3'), 30000);
+    assert.strictEqual(e2.status('m3'), 'done', e2.tasks.read('m3').result); assert.strictEqual(reviewsOf(e2, 'm3').length, 3);
+  });
+
+  await test('fix M3: a fix follow-up cut off by a restart is written again (same round) instead of failing the task', async () => {
+    const o = revOffice('m3f');
+    jt(o, 'm3f', 'm3fj', 'REVIEW changes-then-pass SLOWFIX\nWRITE f.txt f');
+    await until(() => { const r = regR(o.e, 'm3f'); return r.fix && o.e.status(r.fix) === 'working'; }, 30000);
+    const e2 = restart(o.e);
+    await until(() => ended(e2, 'm3f'), 30000);
+    const fx = fixesOf(e2, 'm3f');
+    assert.strictEqual(e2.status('m3f'), 'done', e2.tasks.read('m3f').result);
+    assert.strictEqual(fx.length, 2); assert.strictEqual(fx[1].task, fx[0].task); assert.strictEqual(regR(e2, 'm3f').round, 1);
+  });
+
+  if (hasNpm) {
+    await test('fix M1: accepting a task whose tests never passed says so', async () => {
+      const e = office('m1', 'software'), d = mkRepo('repo-m1');
+      fs.writeFileSync(path.join(d, 'check.js'), "console.log('FAIL: never'); process.exit(1);\n");
+      fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', private: true, scripts: { test: 'node check.js' } }));
+      git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'p');
+      const pm = project(e, 'M one', d); O.updateProject(e.dir, pm, { test: 'npm test' });
+      e.put('m1', `staff: ${e.staff[1]}\nproject: ${pm}\njob: m1j\nkind: code`, 'Never green\nWRITE g.txt g');
+      e.job('m1j', pm); e.jobs.setStatus('m1j', 'approved'); e.tasks.scan();
+      await until(() => regR(e, 'm1').wait === 'boss', 60000);
+      const a = O.listApprovals(e.dir).find((x) => x.kind === 'rounds' && x.ref === 'm1');
+      O.decideApproval(e.dir, a.id, 'accept'); e.gates.decided('m1', 'accept');
+      await until(() => ended(e, 'm1'));
+      assert.ok(e.tasks.read('m1').result.endsWith('Accepted by the boss: the tests did not pass (npm test).\nBranch: office/m1j.'), e.tasks.read('m1').result);
     });
   }
 
