@@ -61,9 +61,9 @@ const flagHit = (first, x, d) => {
   return dn.length === 1 ? new RegExp(`^[${SHORT[first]}]+$`).test(n) && n.includes(dn) : n.length >= 3 && dn.startsWith(n);
 };
 
-// The first refused flag in a command's words, with the reason: '' when there is none.
 // pnpm passes what follows "pnpm test", "pnpm start" or "pnpm run <script>" to the script: its own words end there.
 const pnpmOwn = (w) => (['test', 'start'].includes(w[1]) ? 2 : w[1] === 'run' && w[2] && !/^-/.test(w[2]) ? 3 : w.length);
+// The first refused flag in a command's words, with the reason: '' when there is none.
 function flagRefusal(w) {
   // npm: words after a bare -- belong to the script; pnpm: a -g after the script name is the script's (-C and --dir are still checked)
   const reach = (d) => (w[0] === 'npm' && w.includes('--') ? w.slice(0, w.indexOf('--')) : w[0] === 'pnpm' && GLOBAL_FLAGS.includes(d) ? w.slice(0, pnpmOwn(w)) : w);
@@ -132,6 +132,30 @@ function inlineCode(first, args) {
   return false;
 }
 const firstWord = (s) => { const m = /^("[^"]*"|'[^']*'|\S+)\s*([\s\S]*)$/.exec(s); return m ? [m[1], m[2]] : [s, '']; };
+// A command without a leading git -C "<folder>" (the folder is checked later): git -C x push is git push.
+const noGitC = (p) => (/^git\s+-C\s/.test(p) ? `git ${firstWord(p.replace(/^git\s+-C\s+/, ''))[1]}` : p);
+
+// What an Auto staff may not run, as the list would have caught it: the reason, or '' when there is none.
+function autoRefusal(p, w, win) {
+  const prog = firstWord(p)[0].replace(/["']/g, ''), segs = prog.split(win ? /[\\/]/ : '/');
+  let [first, ...args] = w;
+  if (segs.length > 1) { // by a path: only one inside the project, never to a never-list program, same flags as by name
+    if (!segs.every((x) => PLAIN.test(x) && x !== '..')) return 'Run the command by its name, or by a path inside the project (like ./vendor/bin/phpunit), not by a full path.';
+    first = programName(segs[segs.length - 1]);
+    if (NEVER_PROGRAMS.includes(first)) return `Run ${first} by its name, not by a path.`;
+    const f = flagRefusal([first, ...args]);
+    if (f) return f;
+  } else if (!PLAIN.test(prog)) return 'Run one plain command: start with the program\'s name.'; // no NAME=value, ( or ! first
+  // no wrapper or shell: it can hide another command
+  const wrap = WRAPPERS.find((x) => starts([first, ...args].join(' '), x));
+  if (wrap) return `Run the command itself, not through ${wrap}.`;
+  // no code on the command line (node --import data:, deno eval, python -c, ...)
+  const data = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
+  if ((['node', 'bun', 'deno'].includes(first) && data) || (first === 'deno' && ['eval', 'repl'].includes(args[0])) || (INTERPRETERS.includes(first) && inlineCode(first, args))) return 'Save the code in a file in the project and run the file.';
+  // git clone -u and git ls-remote -u name a program to run
+  if (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x))) return `"-u" is not allowed with git ${args[0]}: it can run any program.`;
+  return '';
+}
 
 const autoOn = (s) => !!s && s.commandMode === 'auto';
 
@@ -149,15 +173,16 @@ function decide(input, office, opts = {}) {
   let undecided = false;
   const no = (reason) => ({ decision: opts.chat ? 'deny' : null, reason });
 
-  // The never-list stays for Auto too: Claude's own auto mode check allows a push, so this guard refuses it.
-  // It is matched on the words as the shell reads them (quotes and backslashes gone, one space between words).
   // one plain command, or "cd <folder> && command && command" - nothing else
   const parts = cmd ? splitCommand(cmd) : null;
   if (!parts) return no('Only plain commands can run here (no ; | $ ` > < & or similar outside quotes).');
-  for (const p of parts) { const d = never(words(p)); if (d) {
-    // in the terminal the boss is there to say yes or no himself
-    return opts.chat ? { decision: 'deny', reason: `"${d}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
-  } }
+  // The never-list, for Auto too (Claude's own check allows a push), on the words as the shell reads them.
+  // In the terminal the boss is there to say yes or no himself.
+  for (const p of parts) {
+    const d = never(words(noGitC(p)));
+    if (d) return opts.chat ? { decision: 'deny', reason: `"${d}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
+  }
+  // flags that run a program, delete a folder or leave the project, whatever allowed the command
   for (const p of parts) {
     const f = flagRefusal(words(p));
     if (f) return opts.chat ? { decision: 'deny', reason: f } : { decision: null };
@@ -192,28 +217,10 @@ function decide(input, office, opts = {}) {
       const [dirArg, rest] = firstWord(gc[1]);
       if (!inside(folder(dirArg))) return elsewhere;
       p = `git ${rest}`;
-      const d = never(words(p));
-      if (d) return opts.chat ? { decision: 'deny', reason: `"${d}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
     }
     const w = words(p);
     if (w[0] === 'git' && /^-/.test(w[1] || '') && !['--version', '--help'].includes(w[1])) return no('Put the git command right after git (only -C "<folder>" may come first).');
-    if (auto) { // an Auto staff has no list to catch these: one plain command, no wrapper, no code on the command line
-      const prog = firstWord(p)[0].replace(/["']/g, ''), segs = prog.split(win ? /[\\/]/ : '/');
-      let [first, ...args] = w;
-      if (segs.length > 1) { // a path: only inside the project (./vendor/bin/phpunit), and never to a never-list program
-        if (!segs.every((x) => PLAIN.test(x) && x !== '..')) return no('Run the command by its name, or by a path inside the project (like ./vendor/bin/phpunit), not by a full path.');
-        first = programName(segs[segs.length - 1]);
-        if (NEVER_PROGRAMS.includes(first)) return no(`Run ${first} by its name, not by a path.`);
-        const f = flagRefusal([first, ...args]);
-        if (f) return no(f);
-      } else if (!PLAIN.test(prog)) return no('Run one plain command: start with the program\'s name.');
-      const wrap = WRAPPERS.find((x) => starts([first, ...args].join(' '), x));
-      if (wrap) return no(`Run the command itself, not through ${wrap}.`);
-      const code = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
-      if (['node', 'bun', 'deno'].includes(first) && code || (first === 'deno' && ['eval', 'repl'].includes(args[0]))) return no('Save the code in a file in the project and run the file.');
-      if (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x))) return no(`"-u" is not allowed with git ${args[0]}: it can run any program.`);
-      if (INTERPRETERS.includes(first) && inlineCode(first, args)) return no('Save the code in a file in the project and run the file.');
-    }
+    if (auto) { const r = autoRefusal(p, w, win); if (r) return no(r); } // an Auto staff has no list to catch these
     if (!allowed.some((a) => starts(p, a))) {
       if (auto) { undecided = true; continue; }
       return no(!staff ? 'The manager can only look things up on GitHub (gh issue view, gh pr view and similar). Hand other command work to a staff.' : `"${p.split(/\s+/).slice(0, 3).join(' ')}" is not on ${name}'s allowed commands. The boss can add it on the Staff page.`);
