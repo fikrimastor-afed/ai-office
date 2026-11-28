@@ -769,6 +769,37 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         assert.ok(!pub.body.kind);
       } finally { await srv8.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
     });
+
+    await test('damaged office records: every approval is refused with 409 (nothing granted, started or pushed, the file unchanged) until the file is put right; missing files do not block', async () => {
+      const w = (...x) => path.join(dir, ...x), off = w('.office');
+      fs.mkdirSync(off, { recursive: true });
+      for (const f of ['jobs.json', 'gates.json', 'pushes.json', 'served.json', 'grants.json']) fs.rmSync(path.join(off, f), { force: true });
+      const mk = async (hand) => {
+        if (!hand) return (await req('POST', '/api/approvals', { from: 'siti', action: 'Send quote Q1', tool: 'send_quotation_email', input: '{"id":"Q1"}' })).body;
+        const id = `hand-${Date.now()}`; fs.writeFileSync(w('approvals', `${id}.md`), '---\nfrom: siti\naction: Push branch office/x to origin\nkind: push\nref: x\ntool: send_quotation_email\ninput: {"id":"Q1"}\nstatus: pending\n---\nx\n'); return { id };
+      };
+      const tasksNow = () => fs.readdirSync(w('tasks')).length;
+      for (const f of ['jobs.json', 'gates.json', 'pushes.json', 'served.json']) {
+        const a = await mk(false), b = await mk(true), t0 = tasksNow();
+        fs.writeFileSync(path.join(off, f), '{ damaged');
+        const list = (await req('GET', '/api/approvals')).body; assert.strictEqual(list.damaged, f); assert.ok(Array.isArray(list.approvals));
+        for (const x of [a, b]) {
+          const file = w('approvals', `${x.id}.md`), before = fs.readFileSync(file, 'utf8');
+          const r = await req('POST', `/api/approvals/${x.id}/decide`, { decision: 'approved' });
+          assert.strictEqual(r.status, 409, f); assert.strictEqual(r.body.error, `The office's records are damaged (${f}). Nothing was decided. Restore the file or delete it, then try again.`);
+          assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'the approval file is unchanged');
+        }
+        assert.ok(!fs.existsSync(path.join(off, 'grants.json')), 'no grant'); assert.strictEqual(tasksNow(), t0, 'nobody started');
+        fs.rmSync(path.join(off, f)); // put right: a missing file is normal
+        assert.ok(Array.isArray((await req('GET', '/api/approvals')).body));
+        const ok = await req('POST', `/api/approvals/${a.id}/decide`, { decision: 'approved' }); assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        assert.ok(fs.existsSync(path.join(off, 'grants.json')), 'works again'); fs.rmSync(path.join(off, 'grants.json'));
+        await req('POST', `/api/approvals/${b.id}/decide`, { decision: 'rejected' });
+        await new Promise((r) => setTimeout(r, 300)); // the task and the manager run this started end before the test does
+        for (let i = 0; i < 100 && ((await req('GET', '/api/tasks')).body.active.length || (await req('GET', '/api/chats')).body.running.length); i++) await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });
