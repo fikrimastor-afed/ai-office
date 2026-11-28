@@ -573,3 +573,48 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 if (process.exitCode) console.log('\nrepo tests FAILED'); else console.log(`\n${n} repo tests passed`);
+
+// pushAsync: the same refusals as push, but the office keeps working while git runs, and git can never wait for a person.
+(async () => {
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-repo-async-'));
+  const bin = path.join(tmp2, 'bin'); fs.mkdirSync(bin);
+  const seen = path.join(tmp2, 'ssh-seen.json');
+  // a fake ssh: records how it was started, then waits (SLOWSSH seconds) and fails
+  fs.writeFileSync(path.join(bin, 'ssh'), `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2), env: { GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT, GIT_ASKPASS: process.env.GIT_ASKPASS, SSH_ASKPASS: process.env.SSH_ASKPASS, SSH_ASKPASS_REQUIRE: process.env.SSH_ASKPASS_REQUIRE, GCM_INTERACTIVE: process.env.GCM_INTERACTIVE } }));\nsetTimeout(() => { process.stderr.write('fake ssh: no route\\n'); process.exit(255); }, Number(process.env.SLOWSSH || 0) * 1000);\n`, { mode: 0o755 });
+  const mk2 = (name) => { const d = path.join(tmp2, name); fs.mkdirSync(d); G(d, 'init'); G(d, 'config', 'user.name', 't'); G(d, 'config', 'user.email', 't@t'); fs.writeFileSync(path.join(d, 'a.txt'), 'x\n'); G(d, 'add', '-A'); G(d, 'commit', '-m', 'first'); return d; };
+  const ok = (name, fn) => fn().then(() => { n++; console.log(`ok ${n} ${name}`); }, (e) => { n++; console.log(`FAIL ${n} ${name}: ${e.message.split('\n')[0]}`); process.exitCode = 1; });
+  try {
+    await ok('pushAsync sends exactly one office branch to origin and refuses what push refuses', async () => {
+      const d = mk2('pa'); const base = R.state(d).branch;
+      const bare = path.join(tmp2, 'pa.git'); fs.mkdirSync(bare); G(bare, 'init', '--bare');
+      G(d, 'remote', 'add', 'origin', bare); R.createBranch(d, 'office/j', base);
+      assert.strictEqual((await R.pushAsync(d, 'main')).ok, false, 'only office/ branches');
+      assert.strictEqual((await R.pushAsync(d, 'office/nope')).ok, false, 'a branch that does not exist');
+      const r = await R.pushAsync(d, 'office/j'); assert(r.ok, r.err);
+      assert(G(bare, 'branch', '--list', 'office/j')); assert.strictEqual(G(bare, 'branch', '--list'), 'office/j', 'nothing else arrived');
+      const nr = mk2('pa-none'); R.createBranch(nr, 'office/j', R.state(nr).branch);
+      assert.strictEqual((await R.pushAsync(nr, 'office/j')).ok, false, 'no origin');
+    });
+    if (process.platform === 'win32') console.log('  (skip: the fake ssh needs a shell script)');
+    else {
+      await ok('pushAsync does not block the event loop, never prompts, and gives up after the time limit', async () => {
+        const d = mk2('pt'); R.createBranch(d, 'office/j', R.state(d).branch);
+        G(d, 'remote', 'add', 'origin', 'ssh://git@example.invalid/x/y.git');
+        const oldPath = process.env.PATH; process.env.PATH = `${bin}${path.delimiter}${oldPath}`; process.env.SLOWSSH = '30';
+        try {
+          let ticks = 0; const iv = setInterval(() => { ticks++; }, 50);
+          const t0 = Date.now(), r = await R.pushAsync(d, 'office/j', { timeoutMs: 600 }).finally(() => clearInterval(iv));
+          assert.strictEqual(r.ok, false); assert.match(r.err, /took longer than/); assert(Date.now() - t0 < 5000, 'it stopped at the limit');
+          assert(ticks >= 6, `the loop kept running (${ticks} ticks)`);
+          const s = JSON.parse(fs.readFileSync(seen, 'utf8'));
+          assert.strictEqual(s.env.GIT_TERMINAL_PROMPT, '0'); assert.strictEqual(s.env.GIT_ASKPASS, ''); assert.strictEqual(s.env.SSH_ASKPASS, '');
+          assert.strictEqual(s.env.SSH_ASKPASS_REQUIRE, 'never'); assert.strictEqual(s.env.GCM_INTERACTIVE, 'never');
+          assert(s.args.join(' ').includes('BatchMode=yes'), s.args.join(' '));
+          process.env.SLOWSSH = '0';
+          const f = await R.pushAsync(d, 'office/j'); assert.strictEqual(f.ok, false); assert.match(f.err, /fake ssh: no route/);
+        } finally { process.env.PATH = oldPath; delete process.env.SLOWSSH; }
+      });
+    }
+  } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
+  if (process.exitCode) console.log('\nrepo async tests FAILED'); else console.log(`\n${n} repo tests passed (with async)`);
+})();
