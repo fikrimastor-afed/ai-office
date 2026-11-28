@@ -280,7 +280,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     const root = wtDir(soft), wt = path.join(root, 'r1'), gone = path.join(root, 'gone1');
     fs.mkdirSync(root, { recursive: true });
     assert.ok(R.addWorktree(r1, wt, 'office/r1', 'office/j10', root).ok);
-    fs.writeFileSync(path.join(wt, 'r.txt'), 'restart\n'); R.commitAll(wt, 'r');
+    fs.writeFileSync(path.join(wt, 'r.txt'), 'restart\n'); R.commitAll(r1, wt, 'office/r1', root, 'r');
     assert.ok(R.addWorktree(r1, gone, 'office/gone1', 'main', root).ok);
     const reg = JSON.parse(fs.readFileSync(path.join(soft.dir, '.office', 'gates.json'), 'utf8'));
     reg.r1 = { repo: r1, wt, branch: 'office/r1', base: 'office/j10', into: 'office/j10' };

@@ -52,8 +52,8 @@ try {
     const wt = W('wt1');
     assert(R.addWorktree(d, wt, 'office/t1', 'office/job1', root).ok);
     fs.writeFileSync(path.join(wt, 'b.txt'), 'new');
-    assert.deepStrictEqual(R.commitAll(wt, 'add b'), { ok: true, committed: true });
-    assert.deepStrictEqual(R.commitAll(wt, 'again'), { ok: true, committed: false });
+    assert.deepStrictEqual(R.commitAll(d, wt, 'office/t1', root, 'add b'), { ok: true, committed: true });
+    assert.deepStrictEqual(R.commitAll(d, wt, 'office/t1', root, 'again'), { ok: true, committed: false });
     const head = G(d, 'rev-parse', 'HEAD'), file = fs.readFileSync(path.join(d, 'a.txt'), 'utf8');
     const m = R.merge(d, 'office/job1', 'office/t1');
     assert(m.ok, m.err);
@@ -73,8 +73,8 @@ try {
     const w1 = W('cw1'), w2 = W('cw2');
     assert(R.addWorktree(d, w1, 'office/c1', 'office/job', root).ok);
     assert(R.addWorktree(d, w2, 'office/c2', 'office/job', root).ok);
-    fs.writeFileSync(path.join(w1, 'a.txt'), 'one\nAAA\nthree\n'); R.commitAll(w1, 'a');
-    fs.writeFileSync(path.join(w2, 'a.txt'), 'one\nBBB\nthree\n'); R.commitAll(w2, 'b');
+    fs.writeFileSync(path.join(w1, 'a.txt'), 'one\nAAA\nthree\n'); R.commitAll(d, w1, 'office/c1', root, 'a');
+    fs.writeFileSync(path.join(w2, 'a.txt'), 'one\nBBB\nthree\n'); R.commitAll(d, w2, 'office/c2', root, 'b');
     assert(R.merge(d, 'office/job', 'office/c1').ok);
     const after = G(d, 'rev-parse', 'office/job');
     const m = R.merge(d, 'office/job', 'office/c2');
@@ -116,7 +116,7 @@ try {
     const base = R.state(d).branch;
     const wt = W('dswt');
     R.addWorktree(d, wt, 'office/d', base, root);
-    fs.writeFileSync(path.join(wt, 'c.txt'), 'c'); R.commitAll(wt, 'c');
+    fs.writeFileSync(path.join(wt, 'c.txt'), 'c'); R.commitAll(d, wt, 'office/d', root, 'c');
     assert(R.diffStat(d, base, 'office/d').includes('c.txt'));
     assert.strictEqual(R.diffStat(d, '-x', 'office/d'), '');
   });
@@ -142,7 +142,7 @@ try {
     assert(R.addWorktree(d, wt, 'office/dt', 'office/dj', root).ok); same('addWorktree');
     R.listWorktrees(d); same('listWorktrees');
     fs.writeFileSync(path.join(wt, 'n.txt'), 'n');
-    assert(R.commitAll(wt, 'n').ok); same('commitAll');
+    assert(R.commitAll(d, wt, 'office/dt', root, 'n').ok); same('commitAll');
     assert(R.merge(d, 'office/dj', 'office/dt').ok); same('merge');
     R.diffStat(d, base, 'office/dj'); same('diffStat');
     G(d, 'remote', 'add', 'origin', bare); R.hasRemote(d, 'origin'); same('hasRemote');
@@ -231,8 +231,8 @@ try {
     const wt = W('hookwt'), wt2 = W('hookwt2');
     assert(R.addWorktree(d, wt, 'office/h1', 'office/h', root).ok);
     assert(R.addWorktree(d, wt2, 'office/h2', 'office/h', root).ok);
-    fs.writeFileSync(path.join(wt, 'h.txt'), 'h'); assert(R.commitAll(wt, 'h').committed);
-    fs.writeFileSync(path.join(wt2, 'g.txt'), 'g'); R.commitAll(wt2, 'g');
+    fs.writeFileSync(path.join(wt, 'h.txt'), 'h'); assert(R.commitAll(d, wt, 'office/h1', root, 'h').committed);
+    fs.writeFileSync(path.join(wt2, 'g.txt'), 'g'); R.commitAll(d, wt2, 'office/h2', root, 'g');
     assert(R.merge(d, 'office/h', 'office/h1').ok);
     assert(R.merge(d, 'office/h', 'office/h2').ok);
     R.state(d);
@@ -247,7 +247,7 @@ try {
     G(d, 'checkout', '-q', '-b', 'other');
     const head = G(d, 'rev-parse', base);
     const wt = W('intowt'); R.addWorktree(d, wt, 'office/s2', base, root);
-    fs.writeFileSync(path.join(wt, 's.txt'), 's'); R.commitAll(wt, 's');
+    fs.writeFileSync(path.join(wt, 's.txt'), 's'); R.commitAll(d, wt, 'office/s2', root, 's');
     for (const into of [`refs/heads/${base}`, `heads/${base}`, 'HEAD', head, '-x', 'nope', `${base}/../x`]) {
       assert.strictEqual(R.merge(d, into, 'office/s2').ok, false, into);
       assert.strictEqual(G(d, 'rev-parse', base), head, into);
@@ -286,8 +286,8 @@ try {
     R.createBranch(d, 'office/uj', base); G(d, 'checkout', '-q', '-b', 'side');
     const w1 = W('uw1'), w2 = W('uw2');
     R.addWorktree(d, w1, 'office/u1', 'office/uj', root); R.addWorktree(d, w2, 'office/u2', 'office/uj', root);
-    fs.writeFileSync(path.join(w1, 'café x.txt'), '1\n'); R.commitAll(w1, '1');
-    fs.writeFileSync(path.join(w2, 'café x.txt'), '2\n'); R.commitAll(w2, '2');
+    fs.writeFileSync(path.join(w1, 'café x.txt'), '1\n'); R.commitAll(d, w1, 'office/u1', root, '1');
+    fs.writeFileSync(path.join(w2, 'café x.txt'), '2\n'); R.commitAll(d, w2, 'office/u2', root, '2');
     assert(R.merge(d, 'office/uj', 'office/u1').ok);
     assert.deepStrictEqual(R.merge(d, 'office/uj', 'office/u2').files, ['café x.txt']);
   });
@@ -326,7 +326,7 @@ try {
     fs.writeFileSync(path.join(d, '.gitattributes'), '* filter=x\n'); G(d, 'add', '-A'); G(d, 'commit', '-m', 'attr');
     G(d, 'config', 'filter.x.smudge', sc); G(d, 'config', 'filter.x.clean', 'cat');
     fs.writeFileSync(path.join(wt, 'q.txt'), 'q');
-    for (const r of [R.addWorktree(d, W('plant2'), 'office/p2', 'office/pj', root), R.commitAll(wt, 'q'), R.merge(d, 'office/pj', 'office/pt'), R.createBranch(d, 'office/p3', base), R.removeWorktree(d, wt, root), R.push(d, 'office/pj')]) {
+    for (const r of [R.addWorktree(d, W('plant2'), 'office/p2', 'office/pj', root), R.commitAll(d, wt, 'office/pt', root, 'q'), R.merge(d, 'office/pj', 'office/pt'), R.createBranch(d, 'office/p3', base), R.removeWorktree(d, wt, root), R.push(d, 'office/pj')]) {
       assert.strictEqual(r.ok, false); assert(/git settings the office will not run with: .*filter\.x\.smudge/.test(r.err), r.err);
     }
     assert.deepStrictEqual(fs.readdirSync(marks), []);
@@ -372,7 +372,7 @@ try {
     const f1 = R.git(d, ['config', 'core.hooksPath']).out;
     const hook = path.join(f1, 'pre-commit'); fs.writeFileSync(hook, `#!/bin/sh\necho x > "${path.join(marks, 'pre-commit')}"\n`); try { fs.chmodSync(hook, 0o755); } catch { /* win */ }
     fs.writeFileSync(path.join(wt, 'l.txt'), 'l');
-    const c = R.commitAll(wt, 'l'); assert(c.ok && c.committed, c.err);
+    const c = R.commitAll(d, wt, 'office/l1', root, 'l'); assert(c.ok && c.committed, c.err);
     assert.deepStrictEqual(fs.readdirSync(marks), []);
     const f2 = R.git(d, ['config', 'core.hooksPath']).out;
     assert.notStrictEqual(f2, f1); assert.deepStrictEqual(fs.readdirSync(f2), []);
@@ -415,7 +415,7 @@ try {
     assert(R.createBranch(d, 'office/x', base).ok);
     const wt = W('huskywt'); assert(R.addWorktree(d, wt, 'office/hx', 'office/x', root).ok);
     fs.writeFileSync(path.join(wt, 'x.txt'), 'x');
-    const c = R.commitAll(wt, 'x'); assert(c.ok && c.committed, c.err);
+    const c = R.commitAll(d, wt, 'office/hx', root, 'x'); assert(c.ok && c.committed, c.err);
     assert.strictEqual(G(wt, 'log', '-1', '--format=%G?'), 'N', 'unsigned');
     assert(R.merge(d, 'office/x', 'office/hx').ok);
     assert.deepStrictEqual(fs.readdirSync(marks), [], 'no husky hook ran');
@@ -449,7 +449,7 @@ try {
     }
     const wt = W('rw1'), wt2 = W('rw2'), wt3 = W('rw3');
     assert(R.addWorktree(d, wt, 'office/t1', base, root).ok);
-    fs.writeFileSync(path.join(wt, 'r.txt'), 'kept'); assert(R.commitAll(wt, 'r').committed);
+    fs.writeFileSync(path.join(wt, 'r.txt'), 'kept'); assert(R.commitAll(d, wt, 'office/t1', root, 'r').committed);
     const tip = G(wt, 'rev-parse', 'HEAD');
     let r = R.addWorktree(d, wt2, 'office/t1', '', root);
     assert(!r.ok && /checked out/.test(r.err), 'refused while checked out in another worktree');
@@ -468,6 +468,50 @@ try {
     assert(!R.addWorktree(d, W('rw4'), 'office/t2', base, root).ok, 'with a from, an existing branch is refused as before');
     assert.strictEqual(snap(d), before, 'the user checkout is unchanged');
     assert.deepStrictEqual(fs.readdirSync(marks), [], 'no hooks ran');
+  });
+  // A folder link, or null where this platform needs privileges for one (Windows without developer mode).
+  const link = (target, at) => { try { fs.symlinkSync(target, at, 'dir'); return true; } catch (e) { if (process.platform === 'win32' && e.code === 'EPERM') return false; throw e; } };
+  test('commitAll commits only in a real office worktree of this repo, on its own branch', () => {
+    const d = mk('ca'); const base = R.state(d).branch;
+    const wt = W('ca1'); assert(R.addWorktree(d, wt, 'office/ca1', base, root).ok);
+    fs.writeFileSync(path.join(wt, 'n.txt'), 'n');
+    const tip = () => G(d, 'rev-parse', 'office/ca1');
+    const t0 = tip();
+    const no = (r, what, msg) => { assert(!r.ok, what); if (msg) assert.strictEqual(r.err, msg, what); assert.strictEqual(tip(), t0, `${what}: nothing committed`); };
+    no(R.commitAll(d, d, 'office/ca1', root, 'x'), 'the project folder itself');
+    no(R.commitAll(d, wt, base, root, 'x'), 'a non-office branch name', 'That branch name is not allowed.');
+    fs.mkdirSync(path.join(wt, 'sub')); no(R.commitAll(d, path.join(wt, 'sub'), 'office/ca1', root, 'x'), 'a folder inside the worktree');
+    const foreign = W('foreign'); fs.mkdirSync(foreign); G(foreign, 'init', '-q'); G(foreign, 'config', 'user.name', 't'); G(foreign, 'config', 'user.email', 't@t');
+    G(foreign, 'checkout', '-q', '-b', 'office/ca1'); fs.writeFileSync(path.join(foreign, 'f.txt'), 'f');
+    no(R.commitAll(d, foreign, 'office/ca1', root, 'x'), 'another repo inside root');
+    assert(!R.git(foreign, ['rev-parse', '--verify', '-q', 'HEAD']).ok, 'the other repo got no commit');
+    G(wt, 'checkout', '-q', '-b', 'feature');
+    no(R.commitAll(d, wt, 'office/ca1', root, 'x'), 'a switched branch', 'The work is on branch feature, not office/ca1.');
+    assert.strictEqual(G(d, 'rev-parse', 'feature'), t0, 'nothing on feature');
+    G(wt, 'checkout', '-q', '--detach');
+    no(R.commitAll(d, wt, 'office/ca1', root, 'x'), 'detached', 'The work is on branch no branch, not office/ca1.');
+    G(wt, 'checkout', '-q', 'office/ca1');
+    if (link(wt, W('calink'))) no(R.commitAll(d, W('calink'), 'office/ca1', root, 'x'), 'a link to the worktree');
+    else console.log('  (skip: links need privileges here)');
+    const other = mk('caother'), ohead = G(other, 'rev-parse', 'HEAD');
+    if (link(other, W('caout'))) { no(R.commitAll(d, W('caout'), 'office/ca1', root, 'x'), 'a link to another repo'); assert.strictEqual(G(other, 'rev-parse', 'HEAD'), ohead); }
+    const c = R.commitAll(d, wt, 'office/ca1', root, 'ok'); assert(c.ok && c.committed, c.err);
+  });
+  test('a root that is a link is refused; the plain delete is only for a real direct child of root', () => {
+    const d = mk('lr'); const base = R.state(d).branch;
+    const wt = W('lr1'); assert(R.addWorktree(d, wt, 'office/lr1', base, root).ok);
+    const deep = W(path.join('deep', 'v1')); fs.mkdirSync(deep, { recursive: true }); fs.writeFileSync(path.join(deep, 'keep.txt'), 'k');
+    assert(!R.removeWorktree(d, deep, root).ok); assert(fs.existsSync(path.join(deep, 'keep.txt')), 'a nested folder is not deleted');
+    const loose = W('loose'); fs.mkdirSync(loose); fs.writeFileSync(path.join(loose, 'x'), 'x');
+    assert(R.removeWorktree(d, loose, root).ok); assert(!fs.existsSync(loose), 'a direct child is still cleaned up');
+    const lroot = path.join(tmp, 'lroot');
+    if (!link(root, lroot)) { console.log('  (skip: links need privileges here)'); return; }
+    assert(!R.addWorktree(d, path.join(lroot, 'lx'), 'office/lx', base, lroot).ok, 'add with a linked root');
+    assert(!R.commitAll(d, path.join(lroot, 'lr1'), 'office/lr1', lroot, 'x').ok, 'commit with a linked root');
+    assert(!R.removeWorktree(d, path.join(lroot, 'lr1'), lroot).ok, 'remove with a linked root'); assert(fs.existsSync(wt));
+    const elsewhere = path.join(tmp, 'elsewhere'); fs.mkdirSync(path.join(elsewhere, 'v1'), { recursive: true }); fs.writeFileSync(path.join(elsewhere, 'v1', 'keep.txt'), 'k');
+    const eroot = path.join(tmp, 'eroot'); link(elsewhere, eroot);
+    assert(!R.removeWorktree(d, path.join(eroot, 'v1'), eroot).ok); assert(fs.existsSync(path.join(elsewhere, 'v1', 'keep.txt')), 'nothing outside is deleted');
   });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
