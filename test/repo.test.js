@@ -441,6 +441,34 @@ try {
     }
     assert(R.safeConfig(d).ok);
   });
+  test('an existing office branch opens in a new worktree; checked out, missing or non-office branches are refused', () => {
+    const d = dirty('reopen'); const before = snap(d); const base = R.state(d).branch;
+    const marks = path.join(tmp, 'remarks'); fs.mkdirSync(marks);
+    if (process.platform !== 'win32') for (const h of ['post-checkout', 'pre-commit', 'post-commit']) {
+      const f = path.join(d, '.git', 'hooks', h); fs.writeFileSync(f, `#!/bin/sh\necho x > "${path.join(marks, h)}"\n`); fs.chmodSync(f, 0o755);
+    }
+    const wt = W('rw1'), wt2 = W('rw2'), wt3 = W('rw3');
+    assert(R.addWorktree(d, wt, 'office/t1', base, root).ok);
+    fs.writeFileSync(path.join(wt, 'r.txt'), 'kept'); assert(R.commitAll(wt, 'r').committed);
+    const tip = G(wt, 'rev-parse', 'HEAD');
+    let r = R.addWorktree(d, wt2, 'office/t1', '', root);
+    assert(!r.ok && /checked out/.test(r.err), 'refused while checked out in another worktree');
+    assert(!fs.existsSync(wt2) || !fs.readdirSync(wt2).length);
+    assert(R.removeWorktree(d, wt, root).ok);
+    r = R.addWorktree(d, wt2, 'office/t1', '', root);
+    assert(r.ok, r.err);
+    assert.strictEqual(G(wt2, 'symbolic-ref', '--short', 'HEAD'), 'office/t1');
+    assert.strictEqual(G(wt2, 'rev-parse', 'HEAD'), tip);
+    assert.strictEqual(fs.readFileSync(path.join(wt2, 'r.txt'), 'utf8'), 'kept');
+    assert(!R.addWorktree(d, wt3, 'office/nope', '', root).ok, 'a branch that does not exist');
+    G(d, 'branch', 'feature');
+    for (const b of [base, 'feature']) assert(!R.addWorktree(d, wt3, b, '', root).ok, b);
+    assert(!R.addWorktree(d, wt3, 'office/t1', undefined, root).ok, 'still checked out (missing from)');
+    assert(R.addWorktree(d, wt3, 'office/t2', base, root).ok, 'with a from, a new branch as before');
+    assert(!R.addWorktree(d, W('rw4'), 'office/t2', base, root).ok, 'with a from, an existing branch is refused as before');
+    assert.strictEqual(snap(d), before, 'the user checkout is unchanged');
+    assert.deepStrictEqual(fs.readdirSync(marks), [], 'no hooks ran');
+  });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
