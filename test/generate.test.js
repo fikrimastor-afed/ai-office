@@ -296,5 +296,46 @@ test('software office: a renamed engineer keeps the role default rules and comma
   assert.deepStrictEqual(biz.staff[0].rules, D.GENERIC_RULES);
 });
 
+test('agent team hook events: software root only while agent teams is on; never staff; business as before', () => {
+  const O = require('../lib/office');
+  const TEAM = ['TeammateIdle', 'TaskCreated', 'TaskCompleted'];
+  const OLD = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'SubagentStart', 'SubagentStop', 'Notification', 'Stop', 'SessionEnd', 'PostToolUse'];
+  const J = (d, ...q) => JSON.parse(fs.readFileSync(path.join(d, ...q), 'utf8'));
+  const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-tev-'));
+  G.writeOffice(sdir, softwareCfg);
+  const root = () => J(sdir, '.claude', 'settings.json'), staffS = (s) => J(sdir, 'staff', s.id, '.claude', 'settings.json');
+  for (const ev of TEAM) assert.ok(root().hooks[ev], ev);
+  for (const s of softwareCfg.staff) for (const ev of TEAM) assert.ok(!(ev in staffS(s).hooks), `${s.id} ${ev}`);
+  assert.deepStrictEqual(G.repairSettings(sdir), [], 'a fresh office needs no repair');
+  O.setAgentTeams(sdir, false);
+  for (const ev of TEAM) assert.ok(!(ev in root().hooks), ev);
+  assert.deepStrictEqual(Object.keys(root().hooks), OLD);
+  // a user's own hook on TaskCompleted stays, off and on
+  const r = root(); r.hooks.TaskCompleted = [{ hooks: [{ type: 'command', command: 'echo mine' }] }];
+  fs.writeFileSync(path.join(sdir, '.claude', 'settings.json'), JSON.stringify(r, null, 2));
+  O.setAgentTeams(sdir, true);
+  assert.strictEqual(root().hooks.TaskCompleted.length, 2); assert.ok(root().hooks.TeammateIdle);
+  O.setAgentTeams(sdir, false);
+  assert.deepStrictEqual(root().hooks.TaskCompleted, [{ hooks: [{ type: 'command', command: 'echo mine' }] }]);
+  assert.ok(!('TeammateIdle' in root().hooks));
+  assert.deepStrictEqual(G.repairSettings(sdir), [], 'the second repair writes nothing');
+  // staff settings written with the three (earlier in this build step) are cleaned on the next start
+  const st = staffS(softwareCfg.staff[0]); st.hooks.TaskCreated = st.hooks.Stop;
+  fs.writeFileSync(path.join(sdir, 'staff', softwareCfg.staff[0].id, '.claude', 'settings.json'), JSON.stringify(st, null, 2));
+  G.repairSettings(sdir);
+  assert.ok(!('TaskCreated' in staffS(softwareCfg.staff[0]).hooks));
+  fs.rmSync(sdir, { recursive: true, force: true });
+  // business, new and from before this update: exactly the hook events from before this build step
+  const bdir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-tevb-'));
+  G.writeOffice(bdir, businessCfg);
+  const files = ['.claude/settings.json', ...businessCfg.staff.map((s) => `staff/${s.id}/.claude/settings.json`)];
+  for (const f of files) assert.deepStrictEqual(Object.keys(J(bdir, f).hooks), OLD, f);
+  const f = path.join(bdir, 'office.json'), j = JSON.parse(fs.readFileSync(f, 'utf8')); delete j.type; fs.writeFileSync(f, JSON.stringify(j));
+  G.repairSettings(bdir);
+  for (const f2 of files) assert.deepStrictEqual(Object.keys(J(bdir, f2).hooks), OLD, f2);
+  assert.deepStrictEqual(G.repairSettings(bdir), []);
+  fs.rmSync(bdir, { recursive: true, force: true });
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);
