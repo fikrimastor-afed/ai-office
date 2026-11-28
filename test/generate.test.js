@@ -58,6 +58,14 @@ test('writes the office files', () => {
   assert.doesNotMatch(read(dir, '.claude/agents/aina.md'), /invois/);
 });
 
+test('task board fields are documented for the manager, not for staff', () => {
+  const office = read(dir, 'OFFICE.md');
+  for (const s of ['needs:', 'role:', 'continues:', 'maxParallel']) assert.ok(office.includes(s), s);
+  const pa = read(dir, 'CLAUDE.md');
+  assert.ok(pa.includes('needs:') && pa.includes('continues:'));
+  assert.ok(!read(dir, 'staff/aina/CLAUDE.md').includes('continues:'));
+});
+
 test('no em or en dashes in generated text', () => {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
   for (const f of walk(dir)) assert.doesNotMatch(fs.readFileSync(f, 'utf8'), /[–—]/, f);

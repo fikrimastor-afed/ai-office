@@ -56,7 +56,7 @@ The dashboard opens at http://localhost:4747.
 
 | Where | What |
 |---|---|
-| **Office** | The live office. Who is working, on what, and who waits for you. The work board (top left) lists every running task with a Stop button. |
+| **Office** | The live office. Who is working, on what, and who waits for you. The work board (top left) lists every running task with a Stop button, and the tasks that are waiting (for other tasks, a free staff or a free place) with the reason. |
 | **Chat** (bottom right) | Talk to the manager, or to any staff directly. The manager gets a summary of direct chats. |
 | **Needs your OK** (top right) | Anything that leaves the office (sending an email, a quotation, recording a payment) waits here for Approve or Reject. You can set an action to Always allow. |
 | **Staff** | Each person's job, rules, look, model and effort, and the commands they may run. |
