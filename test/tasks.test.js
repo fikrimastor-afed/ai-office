@@ -381,6 +381,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
 
   await test('a task run of an Auto staff starts in auto mode with the settings; another staff is unchanged', async () => {
     const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    put('au0', 'siti', 'baseline work au0'); tasks.scan(); await until(() => endedOf('au0'));
     fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.map((s) => (s.id === 'aina' ? { ...s, commandMode: 'auto' } : s)) }));
     put('au1', 'aina', 'auto work au1'); put('au2', 'siti', 'plain work au2');
     tasks.scan(); await until(() => endedOf('au1') && endedOf('au2'));
@@ -389,6 +390,10 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(val(a, '--permission-mode'), 'auto');
     assert.ok(val(a, '--tools').split(',').includes('Bash'));
     assert.ok(JSON.parse(val(a, '--settings')).autoMode);
+    assert.ok(!val(a, '--allowedTools').split(',').includes('Bash'));
+    const base = calls().find((x) => val(x, '-p').includes('baseline work au0'));
+    const strip = (c) => c.args.filter((x, i) => i !== c.args.indexOf('-p') + 1); // all but the prompt text
+    assert.deepStrictEqual(strip(b), strip(base), 'another staff is the same with or without an Auto colleague');
     assert.strictEqual(val(b, '--permission-mode'), 'default'); assert.ok(!b.args.includes('--settings'));
     fs.writeFileSync(f, JSON.stringify(cfg));
   });

@@ -229,9 +229,13 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     const pa = await run('pa');
     assert.strictEqual(val(pa, '--permission-mode'), 'default'); assert.ok(!pa.args.includes('--settings'));
     assert.match(access(dir, 'pa').note, /any command the work needs, checked by Claude Code/);
+    assert.match(access(dir, 'pa').note, /\(for a staff on Auto, Claude Code checks commands that are not on a list\)/);
     assert.strictEqual(access(dir, 'pa').auto, false);
     console.log(JSON.stringify(auto.args)); console.log(JSON.stringify(st));
     fs.writeFileSync(f, JSON.stringify(cfg));
+    const plainNote = access(dir, 'pa').note; // no Auto staff: no Auto clause
+    assert.ok(!/Auto/.test(plainNote));
+    assert.ok(plainNote.includes('A guard checks every command: it must be on their list, run in the office'));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
