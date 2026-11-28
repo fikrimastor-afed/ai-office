@@ -271,6 +271,25 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.match(c.args[c.args.indexOf('-p') + 1], /You have no memory of task f7: read .*f7\.md first\./);
   });
 
+  await test('a follow-up that continues itself, or a circle of follow-ups, fails plainly', async () => {
+    putH('c1', 'staff: siti\ncontinues: c1', 'x');
+    putH('c2', 'staff: siti\ncontinues: c3', 'x'); putH('c3', 'staff: siti\ncontinues: c2', 'y');
+    tasks.scan();
+    assert.strictEqual(tasks.read('c1').result, 'A task cannot continue itself.');
+    assert.match(tasks.read('c2').result, /^These tasks need each other in a circle: c2, c3\.$/);
+    assert.match(tasks.read('c3').result, /^These tasks need each other in a circle: c2, c3\.$/);
+  });
+
+  await test('a follow-up to a role task nobody has claimed yet waits, then runs as whoever took it', async () => {
+    putH('c4', 'staff: siti', 'LONG busy'); putH('c5', 'role: Sales', 'first'); putH('c6', 'continues: c5', 'and then this');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'c4'));
+    assert.strictEqual(tasks.read('c6').status, 'new');
+    assert.deepStrictEqual(tasks.board().waiting.find((w) => w.id === 'c6').waitingFor, ['c5']);
+    await until(() => endedOf('c6'));
+    assert.strictEqual(tasks.read('c6').staff, 'siti'); assert.strictEqual(tasks.read('c6').status, 'done');
+    assert.ok(tasks.read('c6').started >= tasks.read('c5').finished);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
