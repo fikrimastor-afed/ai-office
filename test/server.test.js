@@ -239,6 +239,15 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       });
       assert.ok(got.includes('approvals'));
     });
+
+    await test('parallel limit: PUT /api/parallel saves it, bad values answer 400, GET /api/tasks shows it', async () => {
+      const r = await req('PUT', '/api/parallel', { n: 2 });
+      assert.deepStrictEqual(r.body, { maxParallel: 2 });
+      assert.strictEqual(JSON.parse(read('office.json')).maxParallel, 2);
+      for (const bad of [0, 'x']) { const b = await req('PUT', '/api/parallel', { n: bad }); assert.strictEqual(b.status, 400); assert.match(JSON.stringify(b.body), /Pick a number from 1 to 8/); }
+      const t = await req('GET', '/api/tasks');
+      assert.strictEqual(t.body.limit, 2); assert.ok(Array.isArray(t.body.waiting));
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });

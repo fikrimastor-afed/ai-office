@@ -290,6 +290,20 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.ok(tasks.read('c6').started >= tasks.read('c5').finished);
   });
 
+  await test('the office-wide limit: never more runs at once than maxParallel, oldest first', async () => {
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const set = (v) => fs.writeFileSync(f, JSON.stringify({ ...cfg, maxParallel: v }));
+    for (const [v, want] of [[0, 3], ['abc', 3], [99, 8], [2.9, 2], [undefined, 3], [1, 1]]) { set(v); assert.strictEqual(tasks.limit(), want); }
+    let most = 0; const watch = setInterval(() => { most = Math.max(most, tasks.active().length); }, 20);
+    putH('p1', 'staff: siti', 'LONG a'); putH('p2', 'staff: nurul', 'LONG b'); putH('p3', 'staff: aina', 'c');
+    tasks.scan();
+    assert.deepStrictEqual(tasks.board().waiting.map((w) => [w.id, w.waitingFor]).sort(), [['p2', []], ['p3', []]]);
+    await until(() => endedOf('p1') && endedOf('p2') && endedOf('p3'), 20000);
+    clearInterval(watch); assert.strictEqual(most, 1);
+    assert.ok(tasks.read('p2').started >= tasks.read('p1').finished);
+    fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
