@@ -33,9 +33,9 @@ business team. The manager becomes your tech lead, and the default team is Zara 
 (Backend Engineer), Wei Jie (Frontend Engineer), Priya (QA Engineer) and Hakim (Reviewer). Arif (DevOps
 Engineer) and Sofia (Designer) are optional. The type cannot be changed later.
 
-- The code lives in a linked project folder, not inside the office. Engineers start with Git and npm commands ticked, the Reviewer with Git. Staff cannot push.
-- The tech lead can look up a GitHub issue, pull request or project item by number, read only. It works in the dashboard chat and needs `gh` logged in.
-- Nothing is pushed or published without your OK in Needs your OK.
+- The code lives in a linked project folder, not inside the office. Engineers start with Git and npm commands ticked, the Reviewer with Git.
+- The tech lead can look up a GitHub issue, pull request or project item by number, read only. It is a tick box on the manager's card (on in a software office), works in the dashboard chat and needs `gh` logged in.
+- Staff cannot push or publish. You do that yourself, in your own terminal.
 - In a terminal, Claude Code agent teams are on by default (experimental; switch in Settings > General). Your own Claude skills work as usual there.
 - Coming next: reviews and tests enforced by the office, one branch per task, budgets, pushing after your approval. For now the tech lead is told to add a QA task and a Reviewer task, but nothing forces it.
 
