@@ -12,7 +12,8 @@ const { createServer } = require('../lib/server');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-srv-'));
 // a fake "claude", so briefing the PA (after an approval) never runs the real one in tests
 const bin = path.join(tmp, 'bin'); fs.mkdirSync(bin);
-const fake = "const a = process.argv.slice(2); const m = a[a.indexOf('-p') + 1] || ''; setTimeout(() => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n'), m.includes('LONG') ? 5000 : 0);";
+const callLog = path.join(tmp, 'calls.jsonl');
+const fake = `const L = ${JSON.stringify(callLog)}; ` + "const a = process.argv.slice(2); const m = a[a.indexOf('-p') + 1] || ''; require('fs').appendFileSync(L, JSON.stringify(m) + '\\n'); setTimeout(() => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n'), m.includes('LONG') ? 5000 : 0);";
 if (process.platform === 'win32') {
   fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\n');
   fs.mkdirSync(path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code'), { recursive: true });
@@ -262,7 +263,37 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       await new Promise((r) => setTimeout(r, 600));
       const got = await lines();
       assert.strictEqual(got.length, 1);
-      assert.strictEqual(got[0].text, 'Nurul\'s task "second part" is waiting for a task that was stopped ("LONG first part"). Run that one again from the work board, or stop the waiting one.');
+      assert.strictEqual(got[0].text, 'Nurul\'s task "second part" is waiting for a task that was stopped ("LONG first part"). Press Run again on its row in the work board, or stop the waiting one.');
+    });
+    await test('a failed need: the manager is told who waits and how to retry; an unclaimed role task is named by its role', async () => {
+      const put = (id, head, text) => fs.writeFileSync(path.join(dir, 'tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+      const until = async (fn) => { for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const lines = async (id) => (await req('GET', '/api/chat/pa')).body.messages.filter((m) => m.from === 'system' && m.kind === 'error' && m.task === id);
+      const role = JSON.parse(read('office.json')).staff.find((s) => s.id === 'siti').role;
+      put('b3', 'staff: ghost', 'will fail'); put('b4', `role: ${role}\nneeds: b3`, 'role part'); put('b5', 'staff: nurul\nneeds: b3', 'nurul part');
+      await until(async () => (await lines('b4')).length && (await lines('b5')).length);
+      const tail = 'is waiting for a task that failed ("will fail"). Press Run again on its row in the work board, or stop the waiting one.';
+      assert.strictEqual((await lines('b4'))[0].text, `A task for the next free ${role} ("role part") ${tail}`);
+      assert.strictEqual((await lines('b5'))[0].text, `Nurul's task "nurul part" ${tail}`);
+      const prompts = () => fs.readFileSync(callLog, 'utf8').trim().split('\n').map(JSON.parse);
+      await until(async () => prompts().some((m) => m.includes('task b3')));
+      assert.ok(prompts().find((m) => m.includes('task b3')).includes('Waiting for this task: b4, b5. To retry, write the new task with again: b3.'));
+    });
+    await test('a change to office.json is picked up by waiting tasks at once', async () => {
+      // its own fresh office: on Linux, Node's recursive watch can lose a file after it was swapped in once
+      const dir2 = path.join(tmp, 'office2'); G.writeOffice(dir2, G.buildConfig({ company: 'Two', pa: 'Hana', staff: D.STAFF.slice(0, 2).map(({ name, role, job }) => ({ name, role, job })) }));
+      const srv2 = createServer(dir2); await srv2.listen(0);
+      const t2 = (id) => { try { return fs.readFileSync(path.join(dir2, 'tasks', `${id}.md`), 'utf8'); } catch { return ''; } };
+      const until = async (fn, n = 100) => { for (let i = 0; i < n; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      try {
+        const f = path.join(dir2, 'office.json'), oc = JSON.parse(fs.readFileSync(f, 'utf8')), role = oc.staff.find((s) => s.id === 'aina').role;
+        fs.writeFileSync(path.join(dir2, 'tasks', 'w1.md'), '---\nstaff: aina\nstatus: new\n---\nLONG busy\n');
+        fs.writeFileSync(path.join(dir2, 'tasks', 'w2.md'), `---\nrole: ${role}\nstatus: new\n---\nfor the role\n`);
+        await until(() => /status: working/.test(t2('w1')));
+        await new Promise((r) => setTimeout(r, 500)); // let the start settle, so only office.json changes now
+        fs.writeFileSync(f, JSON.stringify({ ...oc, staff: oc.staff.map((s) => (s.id === 'aina' ? { ...s, role: 'Gone' } : s)) }, null, 2));
+        await until(() => t2('w2').includes(`There is no active staff with the role "${role}".`), 30); // well before w1 ends (5 s)
+      } finally { await srv2.close(); await new Promise((r) => setTimeout(r, 300)); }
     });
   } finally {
     await srv.close();
