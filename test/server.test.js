@@ -407,6 +407,37 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       assert.strictEqual((await req('PUT', '/api/manager', { commandMode: 'auto' })).status, 200);
       assert.strictEqual(JSON.parse(read('office.json')).pa.commandMode, undefined);
     });
+    await test('jobs: a job task end adds a chat line but wakes no manager; the job reaching done wakes it once; GET /api/jobs counts tasks', async () => {
+      const { Jobs } = require('../lib/jobs');
+      const dir4 = path.join(tmp, 'office4'); const cfg4 = G.buildConfig({ company: 'Four', pa: 'Hana', staff: D.STAFF.slice(0, 3).map(({ name, role, job }) => ({ name, role, job })) }); G.writeOffice(dir4, cfg4);
+      const req4 = (m, u) => req(m, u, null, { 'x-office-key': cfg4.key });
+      const srv4 = createServer(dir4), p0 = port; port = await srv4.listen(0);
+      const until = async (fn, n = 100) => { for (let i = 0; i < n; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const prompts = () => fs.readFileSync(callLog, 'utf8').trim().split('\n').map(JSON.parse);
+      try {
+        fs.writeFileSync(path.join(dir4, 'jobs', 'j9.md'), '---\nproject:\nstatus: approved\n---\nLogin page\n\nSpec\n');
+        await until(async () => (await req4('GET', '/api/jobs')).body.some((j) => j.id === 'j9'));
+        const j = (await req4('GET', '/api/jobs')).body.find((x) => x.id === 'j9');
+        assert.deepStrictEqual([j.title, j.status, j.done, j.total], ['Login page', 'planned', 0, 0]);
+        const mk = (id, head, text) => fs.writeFileSync(path.join(dir4, 'tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+        mk('k1', 'staff: siti\njob: j9', 'part one'); mk('k2', 'staff: nurul\njob: j9\nneeds: k1', 'part two');
+        await until(async () => (await req4('GET', '/api/tasks')).body.waiting.some((w) => w.id === 'k2'));
+        assert.strictEqual((await req4('GET', '/api/tasks')).body.waiting.find((w) => w.id === 'k1').reason, "Waiting for the boss's OK on the plan");
+        const before = prompts().length;
+        new Jobs(dir4).setStatus('j9', 'approved'); mk('k3', 'staff: siti\njob: j9\nneeds: k2', 'part three'); // a change in tasks/ makes the office look again
+        await until(async () => (await req4('GET', '/api/jobs')).body.find((x) => x.id === 'j9').status === 'done', 150);
+        await until(() => prompts().some((m) => m.includes('The job "Login page" is done.')));
+        await new Promise((r) => setTimeout(r, 500));
+        const fresh = prompts().slice(before), wakes = fresh.filter((m) => m.startsWith('[Office update'));
+        assert.strictEqual(wakes.length, 1, `one manager run, got ${wakes.length}`);
+        assert.match(wakes[0], /^\[Office update, not from the boss\] The job "Login page" is done\.\n- Siti, "part one": done\./);
+        assert.ok(wakes[0].includes('- Nurul, "part two": done.') && wakes[0].includes('hand it out with a task file.'));
+        const lines = (await req4('GET', '/api/chat/pa')).body.messages.filter((m) => m.task === 'k1' && m.from === 'system');
+        assert.ok(lines.some((m) => m.done && /finished: part one/.test(m.text)), 'the chat line for a job task is still added');
+        const j2 = (await req4('GET', '/api/jobs')).body.find((x) => x.id === 'j9');
+        assert.deepStrictEqual([j2.done, j2.total], [3, 3]);
+      } finally { await srv4.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });

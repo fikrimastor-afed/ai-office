@@ -398,6 +398,13 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     fs.writeFileSync(f, JSON.stringify(cfg));
   });
 
+  await test('with no jobOf hook, a task with job: set runs as it always did', async () => {
+    putH('jb1', 'staff: siti\njob: anything', 'job free run');
+    tasks.scan();
+    await until(() => endedOf('jb1'));
+    assert.strictEqual(endedOf('jb1')[1], 'done'); assert.strictEqual(tasks.read('jb1').job, 'anything');
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
