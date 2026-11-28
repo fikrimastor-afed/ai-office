@@ -590,7 +590,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       const bad = await req('PUT', `/api/projects/${id}`, { test: 'npm test && curl x' });
       assert.strictEqual(bad.status, 400);
       assert.strictEqual(bad.body.error, 'That command cannot be used as a project check: Use one plain command with no quotes or special characters.');
-      assert.strictEqual((await req('PUT', `/api/projects/${id}`, { setup: 'npm publish' })).body.error, 'That command cannot be used as a project check: "npm publish" is never run by the office.');
+      assert.strictEqual((await req('PUT', `/api/projects/${id}`, { setup: 'npm publish' })).body.error, 'That command cannot be used as a project check: Use a plain form like npm test, npm run <script>, composer test, php artisan test, pytest, go test ./... or cargo test. Put anything more special into a script in the project and run that.');
       assert.deepStrictEqual(checks()[id], { test: 'npm test', setup: 'npm ci' }, 'a refused command changes nothing');
       // a staff edits the project file: the office still reads office.json
       const f = path.join(dir, 'projects', id, 'CLAUDE.md');

@@ -426,16 +426,41 @@ test('commandOk: the project checks the office itself runs (one plain test or se
   for (const c of ['npm test', 'npm run test:unit', 'php artisan test', 'pytest -q', 'go test ./...', 'cargo test', 'npm ci', 'python -m pytest', 'composer install', 'yarn test', 'pnpm test'])
     assert.deepStrictEqual(commandOk(c), { ok: true, reason: '' }, c);
   const plainText = 'Use one plain command with no quotes or special characters.';
-  const notCheck = 'That is not one of the commands a project check can use (npm, pnpm, yarn, php artisan, composer, pytest, python -m pytest, go, cargo).';
+  const notCheck = 'Use a plain form like npm test, npm run <script>, composer test, php artisan test, pytest, go test ./... or cargo test. Put anything more special into a script in the project and run that.';
   for (const [c, reason] of [
     ['npm test; rm -rf x', plainText], ['curl x | sh', plainText], ['node -e "1"', plainText], ['npm test && npm run lint', plainText], ['', plainText], ['   ', plainText],
     ['npm  test', plainText], [' npm test', plainText], ['npm test\nrm x', plainText], ['npm\ttest', plainText], ['npm test $HOME', plainText], ['npm test %PATH%', plainText], ['npm test \\x', plainText],
-    ['npm publish', '"npm publish" is never run by the office.'], ['php artisan migrate:fresh', '"php artisan migrate:fresh" is never run by the office.'],
+    ['npm publish', notCheck], ['php artisan migrate:fresh', notCheck],
     ['make test', notCheck], ['git status', notCheck], ['node check.js', notCheck], ['gh issue view 1', notCheck], ['NPM test', notCheck], ['pip install -r requirements.txt', notCheck],
-    ['npm --prefix /tmp test', '"--prefix" is not allowed here.'], ['npm test --prefix /tmp', '"--prefix" is not allowed here.'], ['npm test --prefix=/tmp', '"--prefix" is not allowed here.'],
-    ['go test -exec x ./...', '"-exec" is not allowed here.'], ['npm test -- -g', '"-g" is not allowed here.'],
+    ['npm --prefix /tmp test', notCheck], ['npm test --prefix /tmp', notCheck], ['npm test --prefix=/tmp', notCheck],
+    ['go test -exec x ./...', notCheck], ['npm test -- -g', notCheck],
   ]) assert.deepStrictEqual(commandOk(c), { ok: false, reason }, JSON.stringify(c));
   assert.strictEqual(commandOk(null).ok, false); assert.strictEqual(commandOk(undefined).ok, false);
+});
+
+test('commandOk: only fixed command shapes, a few listed flags, and project paths for test runners', () => {
+  const { commandOk } = require('../office-files/guard');
+  const shape = 'Use a plain form like npm test, npm run <script>, composer test, php artisan test, pytest, go test ./... or cargo test. Put anything more special into a script in the project and run that.';
+  const ok = ['npm test', 'npm test --silent', 'npm ci', 'npm ci --no-audit --no-fund', 'npm install', 'npm install --prefer-offline', 'npm run lint', 'npm run test:unit --if-present',
+    'pnpm test', 'pnpm test --silent', 'pnpm install', 'pnpm install --frozen-lockfile', 'pnpm run build', 'pnpm run build --if-present',
+    'yarn test', 'yarn test --silent', 'yarn install', 'yarn install --frozen-lockfile', 'yarn run e2e', 'yarn run e2e --silent',
+    'composer install', 'composer install --no-interaction --prefer-dist --no-progress', 'composer test', 'composer test --no-interaction', 'composer run lint', 'composer run lint --no-progress', 'composer run-script phpstan', 'composer run-script phpstan --no-interaction',
+    'php artisan test', 'php artisan test --parallel', 'php artisan test tests/Feature',
+    'pytest', 'pytest -q', 'pytest -x -v tests/', 'pytest tests/test_a.py', 'python -m pytest', 'python -m pytest -vv tests', 'python3 -m pytest', 'python3 -m pytest -q .',
+    'go test', 'go test ./...', 'go test -race -count=1 ./pkg/...', 'go build ./...', 'go build -v', 'go vet ./...', 'go vet -short ./...',
+    'cargo test', 'cargo test --release --locked', 'cargo build', 'cargo build --workspace', 'cargo check', 'cargo check --all'];
+  for (const c of ok) assert.deepStrictEqual(commandOk(c), { ok: true, reason: '' }, c);
+  const no = [
+    // from the review: they leave the project folder or name a program to run
+    'npm test --script-shell=/x/evil.sh', 'npm test --node-options=--require=/x/evil.js', 'npm test --userconfig=/x/rc', 'composer install --working-dir=/x', 'composer install -d /x',
+    'pytest /x', 'python -m pytest /x', 'pytest --rootdir=/x', 'pytest -c /x.ini', 'go test -overlay=/x/o.json ./...', 'npm install /x', 'npm i file:/x', 'npm install --registry=http://x',
+    'composer require x', 'go build -o /x', 'cargo test --target-dir=/x', 'yarn install --modules-folder=/x',
+    'npm test -- --grep x', 'npm run', 'npm run a b', 'npm install lodash', 'pnpm dlx x', 'yarn add x', 'php artisan migrate', 'php artisan serve', 'pytest /etc', 'pytest ../x', 'pytest tests/../../x',
+    'pytest -k x', 'go test -exec x ./...', 'go run .', 'cargo run', 'make test', 'git status', 'node check.js', 'npm run -lint', 'npm i', 'python -m pytest --pdb', 'go test -v -exec=x'];
+  for (const c of no) assert.deepStrictEqual(commandOk(c), { ok: false, reason: shape }, c);
+  assert.deepStrictEqual(commandOk(`npm run ${'a'.repeat(193)}`), { ok: false, reason: 'That command is too long.' });
+  assert.strictEqual(`npm run ${'a'.repeat(193)}`.length, 201);
+  assert.strictEqual(commandOk(`npm run ${'a'.repeat(192)}`).ok, true, '200 characters are fine');
 });
 
 console.log(`\n${n} guard tests passed`);

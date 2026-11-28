@@ -58,7 +58,7 @@ const here = path.resolve(value('--dir') || '.');
     if (!flag('--no-open')) openBrowser(url);
     if (r.already) return 0;
     const stop = async () => { console.log('\nStopped.'); if (r.close) await r.close(); process.exit(0); };
-    process.on('SIGINT', stop); process.on('SIGTERM', stop);
+    process.on('SIGINT', stop); process.on('SIGTERM', stop); process.on('SIGHUP', stop);
     return new Promise(() => {}); // keep running
   }
   const { wizard } = require('../lib/wizard');

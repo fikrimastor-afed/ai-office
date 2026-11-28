@@ -284,19 +284,31 @@ function useGrant(dir, id, when = new Date().toISOString()) {
   } catch { /* approval file gone: the grant is what counts */ }
 }
 
-// A project's test or setup command (office.json projectChecks): the office itself runs it, with no guard in front,
-// so only one plain command of a test-capable program from the presets. Case matters: NPM is not npm.
-const CHECK_PROGRAMS = ['npm', 'pnpm', 'yarn', 'php', 'composer', 'pytest', 'python', 'python3', 'go', 'cargo'];
+// A project's test or setup command (office.json projectChecks). The office runs these itself, with no guard in
+// front, so only these fixed shapes are allowed (<name> is a script name), plus a few listed flags, plus, for test
+// runners, paths inside the project. Anything more special goes into a script in the project.
+const CHECK_FORMS = [['npm test', 'js'], ['npm ci', 'js'], ['npm install', 'js'], ['npm run <name>', 'js'],
+  ['pnpm test', 'js'], ['pnpm install', 'js'], ['pnpm run <name>', 'js'], ['yarn test', 'js'], ['yarn install', 'js'], ['yarn run <name>', 'js'],
+  ['composer install', 'composer'], ['composer test', 'composer'], ['composer run <name>', 'composer'], ['composer run-script <name>', 'composer'],
+  ['php artisan test', 'artisan'], ['pytest', 'pytest'], ['python -m pytest', 'pytest'], ['python3 -m pytest', 'pytest'],
+  ['go test', 'go'], ['go build', 'go'], ['go vet', 'go'], ['cargo test', 'cargo'], ['cargo build', 'cargo'], ['cargo check', 'cargo']];
+const CHECK_FLAGS = { js: ['--silent', '--if-present', '--frozen-lockfile', '--no-audit', '--no-fund', '--prefer-offline'], composer: ['--no-interaction', '--prefer-dist', '--no-progress'],
+  artisan: ['--parallel'], pytest: ['-q', '-x', '-v', '-vv'], go: ['-v', '-race', '-short', '-count=1'], cargo: ['--release', '--workspace', '--all', '--locked'] };
+const WITH_PATHS = ['artisan', 'pytest', 'go'];
+const SCRIPT = /^[A-Za-z0-9][A-Za-z0-9:_.-]*$/;
+const inProject = (x) => /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/.test(x) && !x.split('/').includes('..'); // tests/, ./..., never /x or ../x
 function commandOk(cmd) {
   const c = typeof cmd === 'string' ? cmd : '', no = (reason) => ({ ok: false, reason });
+  if (c.length > 200) return no('That command is too long.');
   const parts = /^[A-Za-z0-9_./:=@+-]+( [A-Za-z0-9_./:=@+-]+)*$/.test(c) ? splitCommand(c) : null;
   if (!parts || parts.length !== 1) return no('Use one plain command with no quotes or special characters.');
-  const w = c.split(' '), d = never(w);
-  if (d) return no(`"${d}" is never run by the office.`);
-  const f = (DENY_FLAGS[w[0]] || []).find((x) => w.some((y, k) => k && /^-/.test(y) && flagHit(w[0], y, x)));
-  if (f) return no(`"${f}" is not allowed here.`);
-  const allow = Object.entries(PRESETS).filter(([k]) => !['docs', 'github'].includes(k)).flatMap(([, p]) => p.allow);
-  if (!CHECK_PROGRAMS.includes(w[0]) || !allow.some((a) => starts(c, a))) return no('That is not one of the commands a project check can use (npm, pnpm, yarn, php artisan, composer, pytest, python -m pytest, go, cargo).');
+  const w = c.split(' ');
+  const fits = ([form, kind]) => {
+    const f = form.split(' ');
+    if (w.length < f.length || !f.every((x, i) => (x === '<name>' ? SCRIPT.test(w[i]) : x === w[i]))) return false;
+    return w.slice(f.length).every((x) => CHECK_FLAGS[kind].includes(x) || (WITH_PATHS.includes(kind) && inProject(x)));
+  };
+  if (!CHECK_FORMS.some(fits)) return no('Use a plain form like npm test, npm run <script>, composer test, php artisan test, pytest, go test ./... or cargo test. Put anything more special into a script in the project and run that.');
   return { ok: true, reason: '' };
 }
 
