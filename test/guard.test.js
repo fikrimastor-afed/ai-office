@@ -421,4 +421,21 @@ test('final R: inline code after an on/off flag, python2 -Q, git reset --ha, npm
   }
 });
 
+test('commandOk: the project checks the office itself runs (one plain test or setup command)', () => {
+  const { commandOk } = require('../office-files/guard');
+  for (const c of ['npm test', 'npm run test:unit', 'php artisan test', 'pytest -q', 'go test ./...', 'cargo test', 'npm ci', 'python -m pytest', 'composer install', 'yarn test', 'pnpm test'])
+    assert.deepStrictEqual(commandOk(c), { ok: true, reason: '' }, c);
+  const plainText = 'Use one plain command with no quotes or special characters.';
+  const notCheck = 'That is not one of the commands a project check can use (npm, pnpm, yarn, php artisan, composer, pytest, python -m pytest, go, cargo).';
+  for (const [c, reason] of [
+    ['npm test; rm -rf x', plainText], ['curl x | sh', plainText], ['node -e "1"', plainText], ['npm test && npm run lint', plainText], ['', plainText], ['   ', plainText],
+    ['npm  test', plainText], [' npm test', plainText], ['npm test\nrm x', plainText], ['npm\ttest', plainText], ['npm test $HOME', plainText], ['npm test %PATH%', plainText], ['npm test \\x', plainText],
+    ['npm publish', '"npm publish" is never run by the office.'], ['php artisan migrate:fresh', '"php artisan migrate:fresh" is never run by the office.'],
+    ['make test', notCheck], ['git status', notCheck], ['node check.js', notCheck], ['gh issue view 1', notCheck], ['NPM test', notCheck], ['pip install -r requirements.txt', notCheck],
+    ['npm --prefix /tmp test', '"--prefix" is not allowed here.'], ['npm test --prefix /tmp', '"--prefix" is not allowed here.'], ['npm test --prefix=/tmp', '"--prefix" is not allowed here.'],
+    ['go test -exec x ./...', '"-exec" is not allowed here.'], ['npm test -- -g', '"-g" is not allowed here.'],
+  ]) assert.deepStrictEqual(commandOk(c), { ok: false, reason }, JSON.stringify(c));
+  assert.strictEqual(commandOk(null).ok, false); assert.strictEqual(commandOk(undefined).ok, false);
+});
+
 console.log(`\n${n} guard tests passed`);

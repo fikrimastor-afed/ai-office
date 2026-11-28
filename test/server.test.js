@@ -580,6 +580,32 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         }
       } finally { await srv6.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
     });
+    await test("project checks: set only through the project route, kept in office.json; a test: line a staff writes is not used", async () => {
+      const id = 'kedai-ali-website', checks = () => JSON.parse(read('office.json')).projectChecks || {};
+      const r = await req('PUT', `/api/projects/${id}`, { test: '  npm  test ', setup: 'npm ci' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.strictEqual(r.body.test, 'npm test'); assert.strictEqual(r.body.setup, 'npm ci');
+      assert.deepStrictEqual(checks()[id], { test: 'npm test', setup: 'npm ci' });
+      assert.match(read('projects', id, 'CLAUDE.md'), /^test: npm test$/m); assert.match(read('projects', id, 'CLAUDE.md'), /^setup: npm ci$/m);
+      const bad = await req('PUT', `/api/projects/${id}`, { test: 'npm test && curl x' });
+      assert.strictEqual(bad.status, 400);
+      assert.strictEqual(bad.body.error, 'That command cannot be used as a project check: Use one plain command with no quotes or special characters.');
+      assert.strictEqual((await req('PUT', `/api/projects/${id}`, { setup: 'npm publish' })).body.error, 'That command cannot be used as a project check: "npm publish" is never run by the office.');
+      assert.deepStrictEqual(checks()[id], { test: 'npm test', setup: 'npm ci' }, 'a refused command changes nothing');
+      // a staff edits the project file: the office still reads office.json
+      const f = path.join(dir, 'projects', id, 'CLAUDE.md');
+      fs.writeFileSync(f, read('projects', id, 'CLAUDE.md').replace(/^test: .*$/m, 'test: node evil.js'));
+      assert.strictEqual((await req('GET', `/api/projects/${id}`)).body.test, 'npm test');
+      assert.strictEqual((await req('PUT', `/api/projects/${id}`, { setup: '' })).status, 200);
+      assert.deepStrictEqual(checks()[id], { test: 'npm test' });
+      await req('PUT', `/api/projects/${id}`, { test: '' });
+      assert.ok(!('projectChecks' in JSON.parse(read('office.json'))), 'empty: the entry goes');
+      assert.strictEqual((await req('GET', `/api/projects/${id}`)).body.test, '');
+      const O = require('../lib/office');
+      O.updateProject(dir, id, { test: 'npm test' });
+      O.cleanup(dir, ['projects'], 'CLEAR');
+      assert.ok(!('projectChecks' in JSON.parse(read('office.json'))), 'cleaning out projects drops their checks');
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });

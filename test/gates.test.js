@@ -9,6 +9,7 @@
 //   CHECKOUT <branch>     checks out that branch in the worktree (lines run in order)
 //   SLOWFIX               the session's follow-ups take longer
 // A prompt asking to "run git merge office/<job>" makes it merge and resolve the conflict ("resolved").
+// A prompt saying the project's tests fail makes it write ok.txt, remove sleep.txt and commit (not when STUBBORN).
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -40,6 +41,9 @@ setTimeout(() => {
       const co = /^CHECKOUT (\\S+)$/.exec(line); if (co) g('checkout', '-q', co[1]);
       const swap = /^SWAP (.+)$/.exec(line); if (swap) { fs.rmSync(wt, { recursive: true, force: true }); fs.symlinkSync(swap[1], wt, 'dir'); fs.writeFileSync(path.join(swap[1], 'x.txt'), 'x'); }
     }
+    if (/The project's tests fail after your change/.test(msg) && !sid.startsWith('stubborn')) {
+      fs.writeFileSync(path.join(wt, 'ok.txt'), 'ok\\n'); fs.rmSync(path.join(wt, 'sleep.txt'), { force: true }); g('add', '-A'); g('commit', '-m', 'fix tests');
+    }
     const mm = /run git merge (office\\/[^,\\s]+),/.exec(msg);
     if (mm && !sid.startsWith('stubborn')) {
       if (g('merge', '--no-edit', mm[1]).status !== 0) {
@@ -68,6 +72,7 @@ const R = require('../lib/repo');
 const { Tasks } = require('../lib/tasks');
 const { Jobs } = require('../lib/jobs');
 const { Gates, NOT_READY, NOT_READY_TASK, NO_REPO, ROOT_BAD, CODE_BAD } = require('../lib/gates');
+const { commandOk } = require('../office-files/guard');
 const { access, chatEnv, resolveClaude } = require('../lib/chat');
 
 const git = (cwd, ...a) => { const r = spawnSync('git', a, { cwd, encoding: 'utf8' }); assert.strictEqual(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
@@ -82,11 +87,11 @@ const officeBranches = (d) => git(d, 'branch', '--list', 'office/*');
 const show = (d, ref) => { const r = spawnSync('git', ['show', ref], { cwd: d, encoding: 'utf8' }); return r.status === 0 ? r.stdout.trim() : null; };
 
 // An office with its engine wired like the server does.
-function engine(dir, extra = {}) {
+function engine(dir, extra = {}, gopts = {}) {
   const loadCfg = () => JSON.parse(fs.readFileSync(path.join(dir, 'office.json'), 'utf8'));
   const e = { dir, said: [], ended: [], seen: [] };
   e.jobs = new Jobs(dir, { tasks: () => e.tasks.list(), onChange: (j) => { if (j.status === 'approved') e.gates.jobApproved(j.id); } });
-  e.gates = new Gates({ dir, loadCfg, jobOf: (id) => e.jobs.get(id), say: (t) => e.said.push(t) });
+  e.gates = new Gates({ dir, loadCfg, jobOf: (id) => e.jobs.get(id), say: (t) => e.said.push(t), ...gopts });
   e.tasks = new Tasks(dir, {
     access: (id, o) => access(dir, id, o), claude: resolveClaude, env: chatEnv, loadCfg,
     onStart: () => {}, onEnd: (t, r) => e.ended.push([t.id, t.status, r]), jobOf: (t) => e.jobs.get(t.job), gates: e.gates, ...extra,
@@ -100,11 +105,11 @@ function engine(dir, extra = {}) {
   e.gates.afterRun = (t) => { e.seen.push(...e.tasks.board().checking.map((c) => ({ ...c, file: e.tasks.read(c.id).status }))); return after(t); };
   return e;
 }
-function office(name, type) {
+function office(name, type, gopts) {
   const dir = path.join(tmp, name);
   G.writeOffice(dir, G.buildConfig({ company: 'Acme', pa: 'Hana', type, staff: (type === 'software' ? D.SOFTWARE_STAFF : D.STAFF).slice(0, 3).map(({ name: n, role, job }) => ({ name: n, role, job })) }));
   fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
-  return engine(dir);
+  return engine(dir, {}, gopts);
 }
 const project = (e, title, linked) => { const p = O.createProject(e.dir, { title }); if (linked) O.updateProject(e.dir, p.id, { linked }); return p.id; };
 const until = (fn, ms = 20000) => new Promise((res, rej) => { const t0 = Date.now(); const t = setInterval(() => { let ok = false; try { ok = fn(); } catch { /* not yet */ } if (ok) { clearInterval(t); res(); } else if (Date.now() - t0 > ms) { clearInterval(t); rej(new Error('timeout')); } }, 50); });
@@ -597,6 +602,216 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     await until(() => ['done', 'failed'].includes(soft2.status('na2')));
     assert.strictEqual(soft2.status('na2'), 'done', soft2.tasks.read('na2').result);
     assert.strictEqual(show(code, 'office/nj:a1.txt'), '1'); assert.strictEqual(show(code, 'office/nj:a2.txt'), '2');
+  });
+
+  // ---- the tests gate: a real tiny npm project; the fake staff writes ok.txt (or sleep.txt) that check.js looks at
+  const hasNpm = spawnSync('npm', ['--version'], { shell: process.platform === 'win32', encoding: 'utf8' }).status === 0;
+  if (!hasNpm) console.log('skip: npm is not installed (the tests gate cases)');
+  else {
+    const abs = (f) => JSON.stringify(path.join(tmp, f));
+    const scripts = {
+      'check.js': `const fs = require('fs');
+if (fs.existsSync('sleep.txt')) { fs.writeFileSync(${abs('stop-pid.txt')}, String(process.pid)); setInterval(() => {}, 1000); }
+else if (fs.existsSync('ok.txt')) console.log('all good');
+else { for (let i = 0; i < 80; i++) console.log('noise ' + i); console.log('FAIL: ok.txt is missing'); process.exit(1); }
+`,
+      'setup.js': `const fs = require('fs'); fs.appendFileSync('setup.log', 'ran\\n'); fs.appendFileSync(${abs('setup-times.txt')}, Date.now() + '\\n');
+if (fs.existsSync(${abs('setup-fail')})) { console.log('setup broke'); process.exit(1); }
+`,
+      'tree.js': `const { spawn } = require('child_process');
+spawn(process.execPath, ['-e', 'require("fs").writeFileSync(' + JSON.stringify(${abs('tree-pid.txt')}) + ', String(process.pid)); setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+setInterval(() => {}, 1000);
+`,
+      'big.js': `const x = 'x'.repeat(100); let s = ''; for (let i = 0; i < 50000; i++) s += 'line ' + i + ' ' + x + '\\n'; process.stdout.write(s);
+`,
+      'env.js': `require('fs').writeFileSync(${abs('env.json')}, JSON.stringify({ keys: Object.keys(process.env), ci: process.env.CI }));
+`,
+      '.gitignore': 'setup.log\n',
+      'package.json': JSON.stringify({ name: 'shop', version: '1.0.0', private: true, scripts: { test: 'node check.js', setup: 'node setup.js', tree: 'node tree.js', big: 'node big.js', env: 'node env.js' } }, null, 2),
+    };
+    const checkRepo = (name) => {
+      const d = mkRepo(name);
+      for (const [f, text] of Object.entries(scripts)) fs.writeFileSync(path.join(d, f), text);
+      git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'project'); return d;
+    };
+    const ck = office('checks', 'software');
+    const [c0, c1] = ck.staff;
+    const rc = checkRepo('repo-checks');
+    const pc = project(ck, 'Checked', rc);
+    O.updateProject(ck.dir, pc, { test: 'npm test', setup: 'npm run setup' });
+    const setupTimes = () => { try { return fs.readFileSync(path.join(tmp, 'setup-times.txt'), 'utf8').trim().split('\n').map(Number); } catch { return []; } };
+    const regOf = (e) => JSON.parse(fs.readFileSync(path.join(e.dir, '.office', 'gates.json'), 'utf8'));
+    const gone = (pid) => { try { process.kill(pid, 0); return false; } catch { return true; } };
+
+    await test('tests gate: setup runs once in the new worktree before the run; the tests pass; the result says so', async () => {
+      ck.put('k1', `staff: ${c0}\nproject: ${pc}\njob: kj1\nkind: code`, 'Pass first\nWRITE ok.txt ok');
+      ck.job('kj1', pc); ck.jobs.setStatus('kj1', 'approved'); ck.tasks.scan();
+      await until(() => ['done', 'failed'].includes(ck.status('k1')));
+      const t = ck.tasks.read('k1');
+      assert.strictEqual(t.status, 'done', t.result);
+      assert.ok(t.result.endsWith('Tests: passed (npm test).\nBranch: office/kj1.'), t.result);
+      assert.strictEqual(show(rc, 'office/kj1:ok.txt'), 'ok');
+      assert.strictEqual(setupTimes().length, 1, 'setup ran once');
+      assert.ok(setupTimes()[0] <= callOf('Pass first').at, 'setup ran before the staff run');
+      assert.strictEqual(show(rc, 'office/kj1:setup.log'), null, 'what setup made is not committed (ignored)');
+    });
+
+    await test('tests gate: the tests fail; the office gives the author a follow-up with the tail; after it they pass (round 1)', async () => {
+      ck.put('u1', `staff: ${c1}\nproject: ${pc}\njob: kj2\nkind: code`, 'Fail first\nWRITE other.txt x');
+      ck.job('kj2', pc); ck.jobs.setStatus('kj2', 'approved'); ck.tasks.scan();
+      const onBoard = () => ck.tasks.board().checking.find((x) => x.id === 'u1' && x.reason);
+      await until(onBoard);
+      const name = JSON.parse(fs.readFileSync(path.join(ck.dir, 'office.json'), 'utf8')).staff.find((x) => x.id === c1).name;
+      assert.deepStrictEqual([onBoard().stage, onBoard().round, onBoard().reason], ['tests', 1, `Waiting for ${name} to fix the tests`]);
+      await until(() => ['done', 'failed'].includes(ck.status('u1')));
+      const t = ck.tasks.read('u1'), fix = ck.tasks.list().find((x) => x.fixes === 'u1'), wt = path.join(ck.dir, 'worktrees', 'u1');
+      assert.strictEqual(t.status, 'done', t.result);
+      assert.ok(fix, 'a follow-up was written');
+      assert.ok(fix.task.startsWith(`The project's tests fail after your change (npm test). Fix it in ${wt}, commit, and report.\n\n\`\`\`\n`), fix.task);
+      assert.match(fix.task, /^FAIL: ok\.txt is missing$/m);
+      assert.doesNotMatch(fix.task, /^noise 5$/m, 'only the tail');
+      assert.ok(fix.task.split('\n').length < 70);
+      assert.strictEqual(fix.continues, 'u1'); assert.strictEqual(fix.staff, c1); assert.strictEqual(fix.kind, 'code'); assert.strictEqual(fix.job, 'kj2'); assert.strictEqual(fix.status, 'done');
+      assert.ok(callOf('The project\'s tests fail after your change').msg.includes(`Work only in ${wt}.`), 'same worktree');
+      assert.strictEqual(regOf(ck).u1.round, 1); assert.strictEqual(t.round, '1');
+      assert.strictEqual(regOf(ck).u1.why, 'tests');
+      assert.ok(t.result.endsWith('Tests: passed (npm test).\nBranch: office/kj2.'), t.result);
+      assert.strictEqual(show(rc, 'office/kj2:ok.txt'), 'ok');
+      assert.deepStrictEqual(ck.ended.filter(([id]) => id === 'u1').map((x) => x[1]), ['done']);
+      assert.strictEqual(setupTimes().length, 2, 'setup ran for the new worktree only, not again for the follow-up');
+    });
+
+    await test('tests gate: tests that still fail after 5 rounds fail the task with the tail', async () => {
+      ck.put('v1', `staff: ${c0}\nproject: ${pc}\njob: kj3\nkind: code`, 'Never passes STUBBORN\nWRITE v.txt v');
+      ck.job('kj3', pc); ck.jobs.setStatus('kj3', 'approved'); ck.tasks.scan();
+      await until(() => ['done', 'failed'].includes(ck.status('v1')), 60000);
+      const t = ck.tasks.read('v1');
+      assert.strictEqual(t.status, 'failed');
+      assert.match(t.result, /The project's tests still fail after 5 rounds\.\n\n```\n[\s\S]*FAIL: ok\.txt is missing[\s\S]*\n```$/);
+      assert.strictEqual(ck.tasks.list().filter((x) => x.fixes === 'v1').length, 5);
+      assert.strictEqual(regOf(ck).v1.round, 5);
+      assert.strictEqual(show(rc, 'office/kj3:v.txt'), null, 'nothing merged');
+    });
+
+    await test('tests gate: no test set gives the line; a test: line a staff writes into the project file is not used', async () => {
+      const pn = project(ck, 'No checks', checkRepo('repo-nochecks'));
+      const pf = path.join(ck.dir, 'projects', pn, 'CLAUDE.md');
+      fs.writeFileSync(pf, fs.readFileSync(pf, 'utf8').replace(/^---\n/, '---\ntest: npm test\nsetup: npm run setup\n'));
+      const before = setupTimes().length;
+      ck.put('w1', `staff: ${c0}\nproject: ${pn}\njob: kj4\nkind: code`, 'No checks\nWRITE w.txt w');
+      ck.job('kj4', pn); ck.jobs.setStatus('kj4', 'approved'); ck.tasks.scan();
+      await until(() => ['done', 'failed'].includes(ck.status('w1')));
+      const t = ck.tasks.read('w1');
+      assert.strictEqual(t.status, 'done', t.result);
+      assert.ok(t.result.endsWith('Tests: none set for this project.\nBranch: office/kj4.'), t.result);
+      assert.strictEqual(setupTimes().length, before, 'no setup either');
+    });
+
+    await test('tests gate: a failing setup fails the task before any Claude run, with the tail', async () => {
+      fs.writeFileSync(path.join(tmp, 'setup-fail'), '');
+      ck.put('x1', `staff: ${c0}\nproject: ${pc}\njob: kj5\nkind: code`, 'Setup breaks\nWRITE ok.txt ok');
+      ck.job('kj5', pc); ck.jobs.setStatus('kj5', 'approved'); ck.tasks.scan();
+      await until(() => ['done', 'failed'].includes(ck.status('x1')));
+      fs.rmSync(path.join(tmp, 'setup-fail'));
+      const t = ck.tasks.read('x1');
+      assert.strictEqual(t.status, 'failed');
+      assert.match(t.result, /^The project's setup failed \(npm run setup\)\.\n\n```\n[\s\S]*^setup broke$[\s\S]*```$/m);
+      assert.strictEqual(callOf('Setup breaks'), undefined, 'no Claude run');
+    });
+
+    await test('tests gate: Stop while the tests run kills the check; the task ends stopped, the branch kept', async () => {
+      ck.put('y1', `staff: ${c0}\nproject: ${pc}\njob: kj6\nkind: code`, 'Slow tests\nWRITE sleep.txt zz');
+      ck.job('kj6', pc); ck.jobs.setStatus('kj6', 'approved'); ck.tasks.scan();
+      const pidFile = path.join(tmp, 'stop-pid.txt');
+      await until(() => fs.existsSync(pidFile) && (ck.tasks.board().checking.find((c) => c.id === 'y1') || {}).stage === 'tests');
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      assert.ok(!gone(pid), 'the check runs');
+      assert.deepStrictEqual(ck.tasks.stop('y1'), { ok: true });
+      await until(() => ck.status('y1') === 'stopped');
+      const t = ck.tasks.read('y1');
+      assert.ok(t.result.endsWith('Stopped by the boss while the office was finishing it. Branch office/y1 is in the project folder.'), t.result);
+      await until(() => gone(pid), 3000);
+      assert.ok(!fs.existsSync(path.join(ck.dir, 'worktrees', 'y1')));
+      assert.ok(R.branchExists(rc, 'office/y1'));
+      assert.deepStrictEqual(ck.ended.filter(([id]) => id === 'y1').map((x) => x[1]), ['stopped']);
+      fs.rmSync(pidFile);
+    });
+
+    await test('tests gate: Stop while the setup runs ends the task stopped with no Claude run', async () => {
+      O.updateProject(ck.dir, pc, { setup: 'npm run tree' });
+      const pidFile = path.join(tmp, 'tree-pid.txt');
+      ck.put('y2', `staff: ${c1}\nproject: ${pc}\njob: kj7\nkind: code`, 'Setup hangs\nWRITE ok.txt ok');
+      ck.job('kj7', pc); ck.jobs.setStatus('kj7', 'approved'); ck.tasks.scan();
+      await until(() => fs.existsSync(pidFile));
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      assert.strictEqual(ck.status('y2'), 'working');
+      assert.ok(ck.tasks.active().find((a) => a.id === 'y2').step.startsWith('Setting up the project'));
+      assert.deepStrictEqual(ck.tasks.stop('y2'), { ok: true });
+      await until(() => ck.status('y2') === 'stopped');
+      await until(() => gone(pid), 3000);
+      assert.strictEqual(callOf('Setup hangs'), undefined);
+      O.updateProject(ck.dir, pc, { setup: 'npm run setup' });
+      fs.rmSync(pidFile);
+    });
+
+    await test('runCheck: the time limit kills the whole process tree; the tail says it timed out', async () => {
+      const pidFile = path.join(tmp, 'tree-pid.txt');
+      const quick = await Gates.runCheck(rc, 'npm run tree', { timeoutMs: 300 });
+      assert.strictEqual(quick.ok, false); assert.strictEqual(quick.timedOut, true); assert.match(quick.tail, /timed out/);
+      if (fs.existsSync(pidFile)) { const p0 = Number(fs.readFileSync(pidFile, 'utf8')); await until(() => gone(p0), 3000); fs.rmSync(pidFile); }
+      const r = await Gates.runCheck(rc, 'npm run tree', { timeoutMs: 2500 });
+      assert.strictEqual(r.ok, false); assert.strictEqual(r.timedOut, true); assert.ok(r.tail.endsWith('The check timed out after 2.5 seconds.'), r.tail);
+      assert.ok(fs.existsSync(pidFile), 'the grandchild had started');
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      await until(() => gone(pid), 3000);
+    });
+
+    await test('runCheck: 50,000 lines of output (over 5 MB): only the tail is kept and returned', async () => {
+      const h0 = process.memoryUsage().heapUsed;
+      const r = await Gates.runCheck(rc, 'npm run big');
+      assert.strictEqual(r.ok, true, r.tail); assert.strictEqual(r.code, 0);
+      assert.ok(r.tail.length <= 6000, String(r.tail.length));
+      assert.ok(r.tail.split('\n').length <= 60);
+      assert.match(r.tail, /^line 49999 x+$/m); assert.doesNotMatch(r.tail, /^line 49000 /m);
+      assert.ok(process.memoryUsage().heapUsed - h0 < 5 * 1024 * 1024, 'memory stays flat');
+    });
+
+    await test("runCheck: the check sees the office's environment without its markers, plus CI=1; a refused command never runs", async () => {
+      const keep = [process.env.AI_OFFICE_CHAT, process.env.AI_OFFICE_WHO];
+      process.env.AI_OFFICE_CHAT = '1'; process.env.AI_OFFICE_WHO = 'shah';
+      try {
+        const r = await Gates.runCheck(rc, 'npm run env');
+        assert.strictEqual(r.ok, true, r.tail);
+      } finally {
+        if (keep[0] == null) delete process.env.AI_OFFICE_CHAT; else process.env.AI_OFFICE_CHAT = keep[0];
+        if (keep[1] == null) delete process.env.AI_OFFICE_WHO; else process.env.AI_OFFICE_WHO = keep[1];
+      }
+      const env = JSON.parse(fs.readFileSync(path.join(tmp, 'env.json'), 'utf8'));
+      assert.ok(!env.keys.includes('AI_OFFICE_CHAT') && !env.keys.includes('AI_OFFICE_WHO'), env.keys.join(' '));
+      assert.ok(env.keys.includes('PATH')); assert.strictEqual(env.ci, '1');
+      const bad = await Gates.runCheck(rc, 'npm run env && touch x');
+      assert.deepStrictEqual(bad, { ok: false, code: null, tail: `That command cannot be used as a project check: ${commandOk('npm run env && touch x').reason}`, timedOut: false, refused: true });
+    });
+  }
+
+  await test("a follow-up that opens an office branch again checks the project's repo first", async () => {
+    const e = office('reopen', 'software'), [z0] = e.staff;
+    const pz = project(e, 'Own reopen'), code = path.join(e.dir, 'projects', pz, 'code');
+    e.put('z1', `staff: ${z0}\nproject: ${pz}\njob: zj\nkind: code`, 'Zed\nWRITE z.txt z');
+    e.job('zj', pz); e.jobs.setStatus('zj', 'approved'); e.tasks.scan();
+    await until(() => ['done', 'failed'].includes(e.status('z1')));
+    assert.strictEqual(e.status('z1'), 'done', e.tasks.read('z1').result);
+    assert.ok(!fs.existsSync(path.join(e.dir, 'worktrees', 'z1')));
+    const other = mkRepo('reopen-other'), logs = path.join(code, '.git', 'logs');
+    fs.rmSync(logs, { recursive: true });
+    try { fs.symlinkSync(path.join(other, '.git', 'logs'), logs, 'dir'); } catch (err) { if (err.code === 'EPERM') { console.log('  (skip: links need privileges here)'); return; } throw err; }
+    e.put('z2', `staff: ${z0}\ncontinues: z1`, 'Zed again\nWRITE z2.txt z2');
+    e.tasks.scan(); await sleep(400);
+    assert.strictEqual(e.status('z2'), 'new');
+    assert.strictEqual(e.tasks.board().waiting.find((x) => x.id === 'z2').reason, CODE_BAD);
+    assert.ok(!fs.existsSync(path.join(e.dir, 'worktrees', 'z1')), 'no worktree was made');
+    assert.strictEqual(callOf('Zed again'), undefined);
+    e.tasks.stop('z2');
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

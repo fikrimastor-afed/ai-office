@@ -284,7 +284,23 @@ function useGrant(dir, id, when = new Date().toISOString()) {
   } catch { /* approval file gone: the grant is what counts */ }
 }
 
-module.exports = { PRESETS, MANAGER_PRESETS, managerCmds, ALWAYS_DENY, ASK_FIRST, cmdsOf, autoOn, decide, decideAction, sameInput };
+// A project's test or setup command (office.json projectChecks): the office itself runs it, with no guard in front,
+// so only one plain command of a test-capable program from the presets. Case matters: NPM is not npm.
+const CHECK_PROGRAMS = ['npm', 'pnpm', 'yarn', 'php', 'composer', 'pytest', 'python', 'python3', 'go', 'cargo'];
+function commandOk(cmd) {
+  const c = typeof cmd === 'string' ? cmd : '', no = (reason) => ({ ok: false, reason });
+  const parts = /^[A-Za-z0-9_./:=@+-]+( [A-Za-z0-9_./:=@+-]+)*$/.test(c) ? splitCommand(c) : null;
+  if (!parts || parts.length !== 1) return no('Use one plain command with no quotes or special characters.');
+  const w = c.split(' '), d = never(w);
+  if (d) return no(`"${d}" is never run by the office.`);
+  const f = (DENY_FLAGS[w[0]] || []).find((x) => w.some((y, k) => k && /^-/.test(y) && flagHit(w[0], y, x)));
+  if (f) return no(`"${f}" is not allowed here.`);
+  const allow = Object.entries(PRESETS).filter(([k]) => !['docs', 'github'].includes(k)).flatMap(([, p]) => p.allow);
+  if (!CHECK_PROGRAMS.includes(w[0]) || !allow.some((a) => starts(c, a))) return no('That is not one of the commands a project check can use (npm, pnpm, yarn, php artisan, composer, pytest, python -m pytest, go, cargo).');
+  return { ok: true, reason: '' };
+}
+
+module.exports = { PRESETS, MANAGER_PRESETS, managerCmds, ALWAYS_DENY, ASK_FIRST, cmdsOf, autoOn, decide, decideAction, sameInput, commandOk };
 
 if (require.main === module) {
   let raw = '';
