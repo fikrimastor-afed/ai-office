@@ -275,7 +275,7 @@ test('agent teams: a business office, and one from before this update, get no en
 test('OFFICE.md documents the software settings and has no dashes', () => {
   for (const c of [businessCfg, softwareCfg]) {
     const m = T.officeMd(c);
-    assert.ok(m.includes('"type"')); assert.ok(m.includes('agentTeams')); assert.ok(m.includes('GitHub (read only)'));
+    assert.ok(m.includes('"type"')); assert.ok(m.includes('commandMode')); assert.ok(m.includes('agentTeams')); assert.ok(m.includes('GitHub (read only)'));
     assert.ok(m.includes('pnpm') && m.includes('Yarn') && m.includes('Rust'));
     assert.ok(m.includes('can be ticked per staff too, and for the manager on the manager\'s card'));
     assert.doesNotMatch(m, /^- `skills`/m);

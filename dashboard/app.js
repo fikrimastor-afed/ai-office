@@ -380,15 +380,19 @@ ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in t
         <div class="swatches" data-pick="hair">${HAIRS.map((c) => `<i style="background:${c}" data-v="${c}" class="${c === look.hair ? 'on' : ''}"></i>`).join('')}</div>
         ${runFields(id)}
         <label class="lbl">Commands ${esc(s.name)} may run</label>
+        <div class="cmdmode">${[['listed', 'Listed only', 'Only the commands ticked below.'], ['auto', 'Auto', 'Claude Code checks each command and decides. Less strict than Listed: the office still refuses push, publish and deleting by name, but a script the staff writes can do more. Use it for staff whose work you review.']].map(([v, l, h]) => `<label class="cmd"><input type="radio" name="cmode" value="${v}" ${(s.commandMode === 'auto' ? 'auto' : 'listed') === v ? 'checked' : ''}><span><b>${esc(l)}</b><br><span class="faint">${esc(h)}</span></span></label>`).join('')}</div>
+        <div class="faint kept" style="font-size:11.5px;margin-top:6px">Kept for when you switch back.</div>
         <div class="cmdgrid">${(S.presets || []).map((p) => `<label class="cmd"><input type="checkbox" name="cmd" value="${esc(p.id)}" ${(p.id === 'docs' ? s.docs !== false : (s.commands || []).includes(p.id)) ? 'checked' : ''}><span><b>${esc(p.label)}</b><br><span class="faint">${esc(p.about)}</span></span></label>`).join('')}</div>
         ${docToolsLine()}
         <textarea class="in mono" name="customCommands" rows="2" placeholder="Other commands, one per line, e.g. php vendor/bin/pint" style="margin-top:8px">${esc((s.customCommands || []).join('\n'))}</textarea>
         <div class="faint" style="font-size:11.5px;margin-top:4px;line-height:1.5">Only in the office folder and linked folders. Never from the dashboard: git push, reset --hard, migrate:fresh, db:wipe, deleting with rm. You run those yourself.</div>
-        <label class="lbl">Tools</label><div class="pre" style="padding:0;color:var(--muted)">${esc(s.tools.replace(/<!--[\s\S]*?-->/g, '').replace(/^- Commands you may run.*$/m, '').trim())}</div>
+        <label class="lbl">Tools</label><div class="pre" style="padding:0;color:var(--muted)">${esc(s.tools.replace(/<!--[\s\S]*?-->/g, '').replace(/^- Commands(:)? you may run.*$/m, '').trim())}</div>
         <div class="arcnote" style="margin:10px 0 0">${icon('plug')}<div>To give ${esc(s.name)} a new tool (email, WhatsApp, an API), ask Claude in the office folder, for example <i>"let ${esc(s.name)} send WhatsApp messages"</i>.</div></div>
         <label class="lbl">Saved to</label><div class="mono muted">${esc(s.file)}</div>
       </div>
       <div class="formfoot"><button class="btn pri" id="sSave">${icon('save')}Save</button><button class="btn" id="sCancel">Cancel</button><button class="btn danger" style="margin-left:auto" id="sArch">${icon('archive')}Archive</button></div>`;
+    const dimTicks = () => { const auto = $('[name=cmode]:checked', f).value === 'auto'; $('.kept', f).hidden = !auto; $$('.cmdgrid, .dtline, [name=customCommands]', f).forEach((e) => e.classList.toggle('dim', auto)); };
+    $$('[name=cmode]', f).forEach((r) => { r.onchange = dimTicks; }); dimTicks();
     const pick = { colour: s.colour, skin: look.skin, hair: look.hair };
     const preview = () => { const sc = $('[name=scarf]', f).checked; $('#fAv').innerHTML = av({ colour: pick.colour, look: { scarf: sc, skin: pick.skin, hair: pick.hair } }); };
     $$('[data-pick]', f).forEach((g) => { g.onclick = (e) => { const v = e.target.dataset.v; if (!v) return; pick[g.dataset.pick] = v; $$('i', g).forEach((i) => i.classList.toggle('on', i === e.target)); S.dirty.add('staff'); preview(); }; });
@@ -397,7 +401,7 @@ ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in t
     $('#sSave').onclick = () => {
       const val = (n) => $(`[name=${n}]`, f).value;
       act(() => api(`staff/${id}`, 'PUT', { name: val('name'), role: val('role'), job: val('job'), rules: val('rules').split('\n'), notes: val('notes'),
-        commands: $$('[name=cmd]:checked', f).map((x) => x.value).filter((x) => x !== 'docs'), docs: $$('[name=cmd]:checked', f).some((x) => x.value === 'docs'),
+        commandMode: $('[name=cmode]:checked', f).value, commands: $$('[name=cmd]:checked', f).map((x) => x.value).filter((x) => x !== 'docs'), docs: $$('[name=cmd]:checked', f).some((x) => x.value === 'docs'),
         customCommands: val('customCommands').split('\n').map((x) => x.trim()).filter(Boolean), model: val('model'), effort: val('effort'),
         colour: pick.colour, look: { scarf: $('[name=scarf]', f).checked, skin: pick.skin, hair: pick.hair } }), 'Saved')
         .then(async () => { S.dirty.delete('staff'); S.run = await api('run'); return refresh(['office', 'staff']); });

@@ -291,6 +291,8 @@ body.ok-open #wins{right:456px}
 .cmd{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line2);border-radius:var(--rs);padding:6px 8px;line-height:1.4;font-size:12px;cursor:pointer}
 .cmd input{margin-top:2px}
 .cmd b{font-weight:600}
+.cmdmode{display:grid;grid-template-columns:1fr;gap:6px}
+.dim{opacity:.45}
 .wstrip.work{background:var(--green-soft);border-bottom-color:#BFE6CC}
 .wstrip.work > svg.ic{color:var(--green)}
 .wstrip.work .sq b{color:var(--green)}

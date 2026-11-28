@@ -358,6 +358,31 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       assert.strictEqual(fs.readFileSync(path.join(bdir, '.claude/agents/farah.md'), 'utf8'), T.agentMd(full, s));
       assert.deepStrictEqual(oc.staff[2], { id: 'farah', name: 'Farah', role: 'Marketing', colour: s.colour, look: farah.look });
     });
+    await test('staff commandMode: Auto stored, lines and Bash follow, Listed restores the same text, bad value 400, manager ignores it', async () => {
+      const id = 'siti', rd = () => read('staff/siti/CLAUDE.md'), agent = () => read('.claude/agents/siti.md');
+      const co = () => JSON.parse(read('office.json')).staff.find((x) => x.id === id);
+      await req('PUT', `/api/staff/${id}`, { commands: ['git'], docs: true });
+      const before = rd(), agentBefore = agent();
+      assert.match(before, /^- Commands you may run/m);
+      let r = await req('PUT', `/api/staff/${id}`, { commandMode: 'auto' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.commandMode, 'auto');
+      assert.strictEqual(co().commandMode, 'auto'); assert.deepStrictEqual(co().commands, ['git'], 'ticks are kept');
+      assert.match(rd(), /^- Commands: you may run.*Claude Code checks each one/m); assert.doesNotMatch(rd(), /^- Commands you may run/m);
+      assert.match(agent(), /^tools: .*\bBash\b/m);
+      await req('PUT', `/api/staff/${id}`, { commands: ['git'] }); await req('PUT', `/api/staff/${id}`, { commands: ['git'] }); // saving again does not add the line again
+      assert.strictEqual(rd().match(/^- Commands: you may run/gm).length, 1);
+      await req('PUT', `/api/staff/${id}`, { commands: [], customCommands: [], docs: false }); // Auto with nothing ticked still has Bash
+      assert.match(agent(), /^tools: .*\bBash\b/m); assert.match(rd(), /^- Commands: you may run/m);
+      await req('PUT', `/api/staff/${id}`, { commands: ['git'], docs: true });
+      assert.strictEqual((await req('GET', `/api/staff/${id}`)).body.commandMode, 'auto');
+      r = await req('PUT', `/api/staff/${id}`, { commandMode: 'listed' });
+      assert.strictEqual(r.body.commandMode, 'listed'); assert.strictEqual(co().commandMode, undefined);
+      assert.strictEqual(rd(), before); assert.strictEqual(agent().match(/^tools: .*$/m)[0], agentBefore.match(/^tools: .*$/m)[0]);
+      r = await req('PUT', `/api/staff/${id}`, { commandMode: 'yes' });
+      assert.strictEqual(r.status, 400); assert.strictEqual(r.body.error, 'Commands can be "listed" or "auto".');
+      assert.strictEqual((await req('PUT', '/api/manager', { commandMode: 'auto' })).status, 200);
+      assert.strictEqual(JSON.parse(read('office.json')).pa.commandMode, undefined);
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });

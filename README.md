@@ -98,7 +98,7 @@ Claude usage at API prices. On a Claude subscription you are not billed this; it
 |---|---|
 | Files | Only the office folder and folders you link (Settings, or per project). Everything else is refused. |
 | Office rules | Staff cannot change their own rules, the office settings or the approvals log. |
-| Commands | Only what you tick per staff (git, npm, pnpm, Yarn, Python, Go, Rust, composer, Laravel, Office documents, GitHub read only; GitHub also for the manager, on the manager's card), checked by a small guard script before every command, and only in the office or a linked folder. Never from the dashboard: `git push`, `reset --hard`, deleting with `rm`, `curl`, `sudo` and similar. |
+| Commands | Only what you tick per staff (git, npm, pnpm, Yarn, Python, Go, Rust, composer, Laravel, Office documents, GitHub read only; GitHub also for the manager, on the manager's card), checked by a small guard script before every command, and only in the office or a linked folder. Never from the dashboard: `git push`, `reset --hard`, deleting with `rm`, `curl`, `sudo` and similar. A staff can also be set to Auto, where Claude Code judges each command; the office still refuses push, publish and deleting, but Auto is less strict than the ticked list. |
 | Office documents | Staff may run `node` only on a script saved inside the office. |
 | Actions that leave the office | Ask first by default (Needs your OK). |
 | Your data | Stays in your office folder. The dashboard listens on your own computer only (localhost). AI Office stores no logins or passwords. |
