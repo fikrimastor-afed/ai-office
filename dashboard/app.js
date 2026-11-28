@@ -43,7 +43,8 @@ const pa = () => S.office.pa;
 const staffById = (id) => S.staff.find((s) => s.id === id) || (S.office.archived || []).find((s) => s.id === id);
 const av = (s, cls = '') => `<span class="av ${cls}">${portrait(s.colour, s.look)}</span>`;
 const paAv = () => av({ colour: pa().colour, look: pa().look || { scarf: true, skin: '#F2C9A0' } });
-const MGR = '<span class="mgr" title="Manager: oversees all staff"><img src="assets/emoji/star.png" alt="">Manager</span>';
+const mgrName = () => (S.office.type === 'software' ? 'Tech Lead' : 'Manager');
+const MGR = () => `<span class="mgr" title="${mgrName()}: oversees all staff"><img src="assets/emoji/star.png" alt="">${mgrName()}</span>`;
 const nameOf = (id) => (id === 'boss' ? 'You' : (staffById(id) || {}).name || id || '');
 function when(iso) {
   if (!iso) return '';
@@ -318,7 +319,7 @@ function renderStaff() {
     const stCells = (id) => { const x = S.status.people[id] || { status: 'sleeping' };
       return `<td><span class="badge ${x.status}"><i class="d ${x.status}"></i>${LAB[x.status]}</span></td><td class="muted" style="max-width:260px">${esc(x.status === 'working' ? taskText(id, x.task) : '') || '-'}</td><td class="muted">${x.last ? when(x.last) : '-'}</td>`; };
     $('#staffList').innerHTML = `<table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Now doing</th><th>Last active</th></tr></thead><tbody>
-      <tr data-who="pa" class="${S.sel.staff === 'pa' ? 'sel' : ''}"><td><span class="who">${paAv()}${esc(pa().name)} ${MGR}</span></td><td>Manager</td>${stCells('pa')}</tr>
+      <tr data-who="pa" class="${S.sel.staff === 'pa' ? 'sel' : ''}"><td><span class="who">${paAv()}${esc(pa().name)} ${MGR()}</span></td><td>${mgrName()}</td>${stCells('pa')}</tr>
       ${S.staff.map((s) => `<tr data-who="${esc(s.id)}" class="${S.sel.staff === s.id ? 'sel' : ''}" title="${esc(s.job)}"><td><span class="who">${av(s)}${esc(s.name)}</span></td><td><span style="display:inline-flex;align-items:center;gap:6px"><i class="d" style="border-radius:2px;background:${esc(s.colour)}"></i>${esc(s.role)}</span>${invChip(s.id)}</td>${stCells(s.id)}</tr>`).join('')}
       </tbody></table>`;
     $$('#staffList tr[data-who]').forEach((tr) => { tr.onclick = () => { if (S.dirty.has('staff') && !confirm('Discard your unsaved changes?')) return; S.dirty.delete('staff'); S.sel.staff = tr.dataset.who; renderStaff(); }; });
@@ -353,8 +354,8 @@ function renderStaffForm() {
   const f = $('#staffForm');
   const id = S.sel.staff;
   if (id === 'pa') {
-    f.innerHTML = `<div class="ph">${paAv()}<h3>${esc(pa().name)}</h3>${MGR}<div class="acts"><button class="ibtn" data-x>${icon('x')}</button></div></div>
-      <div class="pb pre">${esc(pa().name)} is your manager. Every task goes through ${esc(pa().name)}, who hands it to the right staff, checks the result and reports back to you.
+    f.innerHTML = `<div class="ph">${paAv()}<h3>${esc(pa().name)}</h3>${MGR()}<div class="acts"><button class="ibtn" data-x>${icon('x')}</button></div></div>
+      <div class="pb pre">${esc(pa().name)} is your ${mgrName().toLowerCase()}. Every task goes through ${esc(pa().name)}, who hands it to the right staff, checks the result and reports back to you.
 
 ${esc(pa().name)}'s instructions are in <span class="mono">CLAUDE.md</span> in the office folder. The team table in it updates by itself when you add, edit or archive staff.</div>
       <div class="pb form" id="pf">${runFields('pa')}</div>
@@ -573,7 +574,7 @@ function renderSettings() {
   const body = {
     general: `<h3 style="margin-bottom:12px">General</h3><div class="kv">
       <span class="muted">Company</span><span>${esc(S.office.company)}</span>
-      <span class="muted">Manager</span><span>${esc(pa().name)}</span>
+      <span class="muted">${mgrName()}</span><span>${esc(pa().name)}</span>
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
       <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span>
       <span class="muted">Staff working at the same time</span><span><input class="in" id="parN" type="number" min="1" max="8" value="${esc(S.limit || 3)}" style="width:70px"> <button class="btn sm" id="parSave">Save</button><div class="muted" style="margin-top:4px">More at once is faster and uses your Claude plan faster.</div></span></div>
@@ -721,7 +722,7 @@ function renderChats() {
 
   dock.innerHTML = people.map((p) => {
     const st = (S.status.people[p.id] || {}).status || 'sleeping', c = chatOf(p.id);
-    return `<div class="head ${shown.includes(p.id) ? 'open' : ''} ${c.running ? 'busy' : ''}" data-chat="${esc(p.id)}" style="--ring:${RING[st]}">${av(p)}${c.unread ? `<span class="ub">${c.unread}</span>` : ''}${p.id === 'pa' ? '<span class="mstar"><img src="assets/emoji/star.png" alt=""></span>' : ''}<span class="nmtip">${esc(p.name)}${p.id === 'pa' ? ' (Manager)' : ''} . ${SLAB[st]}</span></div>`;
+    return `<div class="head ${shown.includes(p.id) ? 'open' : ''} ${c.running ? 'busy' : ''}" data-chat="${esc(p.id)}" style="--ring:${RING[st]}">${av(p)}${c.unread ? `<span class="ub">${c.unread}</span>` : ''}${p.id === 'pa' ? '<span class="mstar"><img src="assets/emoji/star.png" alt=""></span>' : ''}<span class="nmtip">${esc(p.name)}${p.id === 'pa' ? ` (${mgrName()})` : ''} . ${SLAB[st]}</span></div>`;
   }).join('');
 
   // keep windows (and what the boss is typing) between renders
@@ -743,7 +744,7 @@ function renderChats() {
     const p = personOf(id), c = chatOf(id);
     const st = c.running ? 'working' : ((S.status.people[id] || {}).status || 'sleeping');
     w.classList.toggle('min', V.min.includes(id));
-    $('.wh', w).innerHTML = `${av(p)}<b>${esc(p.name)}</b>${id === 'pa' ? MGR : ''}<span class="badge ${st}" style="height:18px;font-size:11px"><i class="d ${st}"></i>${SLAB[st]}</span><div class="acts"><button class="ibtn" data-newchat="${esc(id)}" title="New conversation (${esc(p.name)} starts fresh; this chat stays above)">${icon('refresh-cw')}</button><button class="ibtn" data-min="${esc(id)}" title="Minimise">${icon('minus')}</button><button class="ibtn" data-close="${esc(id)}" title="Close">${icon('x')}</button></div>`;
+    $('.wh', w).innerHTML = `${av(p)}<b>${esc(p.name)}</b>${id === 'pa' ? MGR() : ''}<span class="badge ${st}" style="height:18px;font-size:11px"><i class="d ${st}"></i>${SLAB[st]}</span><div class="acts"><button class="ibtn" data-newchat="${esc(id)}" title="New conversation (${esc(p.name)} starts fresh; this chat stays above)">${icon('refresh-cw')}</button><button class="ibtn" data-min="${esc(id)}" title="Minimise">${icon('minus')}</button><button class="ibtn" data-close="${esc(id)}" title="Close">${icon('x')}</button></div>`;
     const waits = id === 'pa' ? [] : pendingOks().filter((a) => a.from === id);
     const work = id === 'pa' ? (S.tasks || []) : (S.tasks || []).filter((t) => t.staff === id || t.from === id); // their own work, and what they asked a colleague
     $('.wstrips', w).innerHTML = workLine(work) + waits.map((a) => `<div class="wstrip">${icon('hand')}<div class="sq"><b>Waiting for your OK</b>${esc(a.action)}</div><button class="btn sm ok" data-ok="${esc(a.id)}" data-d="approved">Approve</button><button class="btn sm" data-ok="${esc(a.id)}" data-d="rejected">Reject</button></div>`).join('');
