@@ -433,6 +433,26 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(tasks.read('rh4').result, ''); assert.ok(tasks.read('rh4').task.includes('    ## Result'));
   });
 
+  await test("a Result heading the lead writes in a new task is task text; the office's first result keeps it and adds its own; ## result is not the heading", async () => {
+    const f = path.join(dir, 'tasks', 'lr1.md');
+    fs.writeFileSync(f, '---\nstaff: siti\nstatus: new\n---\nTable for the boss\n\n## Result\nexpected: a table with prices\n');
+    let t = tasks.read('lr1');
+    assert.strictEqual(t.result, ''); assert.strictEqual(t.task, 'Table for the boss\n\n## Result\nexpected: a table with prices');
+    tasks.scan(); await until(() => endedOf('lr1'));
+    t = tasks.read('lr1');
+    assert.strictEqual(t.result, 'Done: Table for the boss'); assert.strictEqual(t.reported, 'yes');
+    assert.strictEqual(t.task, 'Table for the boss\n\n    ## Result\nexpected: a table with prices');
+    assert.strictEqual(fs.readFileSync(f, 'utf8').match(/^## Result$/gm).length, 1);
+    tasks.write('lr1', {}, 'Second'); assert.strictEqual(tasks.read('lr1').result, 'Second'); assert.ok(tasks.read('lr1').task.includes('expected: a table'));
+    const lead = (status) => fs.writeFileSync(path.join(dir, 'tasks', 'lr2.md'), `---\nstaff: siti\nstatus: ${status}\n---\nT\n\n## Result\nnot yet\n`);
+    lead('working'); assert.strictEqual(tasks.read('lr2').result, ''); assert.ok(tasks.read('lr2').task.includes('not yet'));
+    for (const st of ['done', 'failed', 'stopped', 'checking']) { lead(st); assert.strictEqual(tasks.read('lr2').result, 'not yet', st); }
+    fs.writeFileSync(path.join(dir, 'tasks', 'lr3.md'), '---\nstaff: siti\nstatus: new\nreported: yes\n---\nT\n\n## Result\n\nr\n');
+    assert.strictEqual(tasks.read('lr3').result, 'r');
+    fs.writeFileSync(path.join(dir, 'tasks', 'lr4.md'), '---\nstaff: siti\nstatus: done\n---\nT\n\n## result\nlower\n\n## Result\n\nreal\n');
+    assert.strictEqual(tasks.read('lr4').result, 'real'); assert.ok(tasks.read('lr4').task.includes('## result\nlower'));
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

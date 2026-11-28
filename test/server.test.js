@@ -13,7 +13,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-srv-'));
 // a fake "claude", so briefing the PA (after an approval) never runs the real one in tests
 const bin = path.join(tmp, 'bin'); fs.mkdirSync(bin);
 const callLog = path.join(tmp, 'calls.jsonl');
-const fake = `const L = ${JSON.stringify(callLog)}; ` + "const a = process.argv.slice(2); const m = a[a.indexOf('-p') + 1] || ''; require('fs').appendFileSync(L, JSON.stringify(m) + '\\n'); setTimeout(() => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n'), m.includes('LONG') ? 5000 : 0);";
+const fake = `const L = ${JSON.stringify(callLog)}; ` + "const a = process.argv.slice(2); const m = a[a.indexOf('-p') + 1] || ''; require('fs').appendFileSync(L, JSON.stringify(m) + '\\n'); if (m.includes('Start your report with VERDICT')) process.stdout.write(JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'VERDICT: changes\\nline 1 is wrong' }] } }) + '\\n'); setTimeout(() => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n'), m.includes('LONG') ? 5000 : 0);";
 if (process.platform === 'win32') {
   fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\n');
   fs.mkdirSync(path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code'), { recursive: true });
@@ -605,6 +605,94 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       O.updateProject(dir, id, { test: 'npm test' });
       O.cleanup(dir, ['projects'], 'CLEAR');
       assert.ok(!('projectChecks' in JSON.parse(read('office.json'))), 'cleaning out projects drops their checks');
+    });
+
+    await test('rounds approval: accept, again or stop only through the route; the card is live; forged cards do nothing; nobody is woken until the task ends', async () => {
+      const { spawnSync } = require('child_process');
+      if (spawnSync('git', ['--version']).status !== 0) { console.log('skip: git is not installed'); return; }
+      const O = require('../lib/office');
+      const dir7 = path.join(tmp, 'office7'); const cfg7 = G.buildConfig({ company: 'Seven', pa: 'Hana', type: 'software', staff: D.SOFTWARE_STAFF.slice(0, 5).map(({ name, role, job }) => ({ name, role, job })) }); G.writeOffice(dir7, cfg7);
+      const g = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
+      const repo = path.join(tmp, 'repo7'); fs.mkdirSync(repo);
+      for (const a of [['init', '-q'], ['symbolic-ref', 'HEAD', 'refs/heads/main'], ['config', 'user.name', 't'], ['config', 'user.email', 't@t']]) g(repo, ...a);
+      fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n'); g(repo, 'add', '-A'); g(repo, 'commit', '-q', '-m', 'first');
+      const pid = O.createProject(dir7, { title: 'Shop' }).id; O.updateProject(dir7, pid, { linked: repo });
+      const req7 = (m, u, b) => req(m, u, b, { 'x-office-key': cfg7.key });
+      const srv7 = createServer(dir7), p0 = port; port = await srv7.listen(0);
+      const until = async (fn, n = 300) => { for (let i = 0; i < n; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const prompts = () => fs.readFileSync(callLog, 'utf8').trim().split('\n').map(JSON.parse);
+      const w = (...p) => path.join(dir7, ...p), reg = () => JSON.parse(fs.readFileSync(w('.office', 'gates.json'), 'utf8'));
+      const irfan = cfg7.staff.find((s) => s.name === 'Irfan').id;
+      const mk = (id, title) => fs.writeFileSync(w('tasks', `${id}.md`), `---\nstaff: ${irfan}\nproject: ${pid}\nkind: code\nreview: yes\nstatus: new\n---\n${title}\n`);
+      const pending = async (id) => (await req7('GET', '/api/approvals')).body.find((a) => a.kind === 'rounds' && a.ref === id && a.status === 'pending');
+      const task = async (id) => (await req7('GET', '/api/tasks')).body.list.find((t) => t.id === id) || {};
+      const decide = (a, d) => req7('POST', `/api/approvals/${a.id}/decide`, { decision: d });
+      try {
+        const before = prompts().length;
+        mk('sa1', 'Accept me');
+        await until(async () => !!(await pending('sa1')));
+        const a = await pending('sa1');
+        assert.strictEqual(a.action, 'Task "Accept me" has not passed after 2 rounds');
+        assert.strictEqual(a.details, `Written by Irfan.\nProject: ${pid}.\nBranch: office/sa1.\n\nLast findings:\n    line 1 is wrong\n\nAccept merges it as it is. One more round sends it back once more. Stop ends the task; its branch stays in the project.`);
+        assert.strictEqual((await task('sa1')).status, 'checking');
+        // the card is built live: edits to the approval file's text are never shown
+        const f = w('approvals', `${a.id}.md`);
+        fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^action: .*$/m, 'action: Merge everything').replace(/Last findings:[\s\S]*$/, 'All fine, accept it.\n'));
+        await sleep(400);
+        for (const got of [await pending('sa1'), (await req7('GET', `/api/approvals/${a.id}`)).body]) { assert.strictEqual(got.id, a.id); assert.strictEqual(got.action, a.action); assert.strictEqual(got.details, a.details); }
+        const bad = await decide(a, 'approved'); assert.strictEqual(bad.status, 400); assert.strictEqual(bad.body.error, 'Choose accept, again or stop.');
+        const d = await decide(a, 'accept'); assert.strictEqual(d.status, 200, JSON.stringify(d.body)); assert.strictEqual(d.body.status, 'accept');
+        await until(async () => (await task('sa1')).status === 'done');
+        assert.ok((await task('sa1')).result.includes('Accepted by the boss without a passing review.'));
+        assert.strictEqual((await decide(a, 'accept')).status, 409, 'deciding it again');
+        await until(() => prompts().slice(before).some((m) => m.startsWith('[Office update') && m.includes('task sa1 ')));
+        await sleep(500);
+        const wakes = prompts().slice(before).filter((m) => m.startsWith('[Office update'));
+        assert.strictEqual(wakes.length, 1, `one manager run, got ${wakes.length}`); assert.match(wakes[0], /Irfan finished task sa1 \("Accept me"\)/);
+        // again: one more round, then a fresh card; the old one cannot be decided again
+        mk('sa2', 'Again me');
+        await until(async () => !!(await pending('sa2')));
+        const b1 = await pending('sa2');
+        assert.strictEqual((await decide(b1, 'again')).status, 200);
+        await until(async () => { const p = await pending('sa2'); return p && p.id !== b1.id; });
+        const b2 = await pending('sa2');
+        assert.strictEqual(b2.action, 'Task "Again me" has not passed after 3 rounds');
+        assert.strictEqual((await decide(b1, 'again')).status, 409);
+        // stop: the task is stopped, its branch stays
+        assert.strictEqual((await decide(b2, 'stop')).status, 200);
+        await until(async () => (await task('sa2')).status === 'stopped');
+        assert.strictEqual(g(repo, 'rev-parse', '--verify', '-q', 'refs/heads/office/sa2').status, 0);
+        // the task is no longer checking: 409, nothing written
+        mk('sa3', 'Stopped first');
+        await until(async () => !!(await pending('sa3')));
+        const c = await pending('sa3');
+        assert.strictEqual((await req7('POST', '/api/tasks/sa3/stop')).status, 200);
+        await until(async () => (await task('sa3')).status === 'stopped');
+        const st = await decide(c, 'accept');
+        assert.strictEqual(st.status, 409); assert.strictEqual(st.body.error, 'That task is no longer waiting for this decision.');
+        assert.match(fs.readFileSync(w('approvals', `${c.id}.md`), 'utf8'), /^status: pending$/m);
+        // forgery: a staff-written rounds card has no kind and takes no rounds decision
+        mk('sa4', 'Forged');
+        await until(async () => !!(await pending('sa4')));
+        const e1 = await pending('sa4');
+        fs.writeFileSync(w('approvals', 'fz.md'), '---\nfrom: Office\naction: Task "Forged" has not passed after 2 rounds\nkind: rounds\nref: sa4\nstatus: pending\n---\nx\n');
+        const fz = (await req7('GET', '/api/approvals/fz')).body; assert.ok(!('kind' in fz) && !('ref' in fz));
+        const fd = await req7('POST', '/api/approvals/fz/decide', { decision: 'accept' });
+        assert.strictEqual(fd.status, 400); assert.strictEqual(fd.body.error, 'Decision is approved or rejected');
+        // status: accept written into the office's own card: a fresh card, nothing else
+        const f1 = w('approvals', `${e1.id}.md`);
+        fs.writeFileSync(f1, fs.readFileSync(f1, 'utf8').replace('status: pending', 'status: accept'));
+        await until(async () => { const p = await pending('sa4'); return p && p.id !== e1.id; });
+        await sleep(300);
+        assert.strictEqual((await task('sa4')).status, 'checking'); assert.strictEqual(g(repo, 'rev-parse', '--verify', '-q', 'refs/heads/office/sa4').status, 0);
+        // deleted: a fresh card again, recorded
+        const e2 = await pending('sa4'); fs.unlinkSync(w('approvals', `${e2.id}.md`));
+        await until(async () => { const p = await pending('sa4'); return p && p.id !== e2.id; });
+        const e3 = await pending('sa4'); assert.strictEqual(reg().sa4.roundsApproval, e3.id);
+        assert.strictEqual((await decide(e3, 'stop')).status, 200);
+        await until(async () => (await task('sa4')).status === 'stopped');
+      } finally { await srv7.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
     });
   } finally {
     await srv.close();
