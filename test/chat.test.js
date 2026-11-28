@@ -243,6 +243,19 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.ok(plainNote.includes('A guard checks every command: it must be on their list, run in the office'));
   });
 
+  await test('git files are Edit-denied in linked folders, project repos and worktrees, for staff and the manager', async () => {
+    const T = require('../lib/templates');
+    const ext = path.join(tmp, 'git linked'); fs.mkdirSync(ext);
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    cfg.linked = [{ path: ext, label: 'Repo' }]; fs.writeFileSync(f, JSON.stringify(cfg));
+    const r = T.rulePath(path.resolve(dir)), want = [`Edit(${T.rulePath(ext)}/.git/**)`, `Edit(${r}/projects/*/code/.git/**)`, `Edit(${r}/worktrees/*/.git)`];
+    for (const who of ['siti', 'pa']) for (const w of want) assert.ok(access(dir, who).denied.includes(w), `${who}: ${w}`);
+    chats.send('siti', 'hi');
+    await idle('siti');
+    const c = calls().pop(), denied = c.args[c.args.indexOf('--disallowedTools') + 1].split(',');
+    for (const w of want) assert.ok(denied.includes(w), `run: ${w}`);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} chat tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
