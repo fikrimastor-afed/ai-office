@@ -159,7 +159,7 @@ try {
     for (const x of [d, d + path.sep, path.join(d, '.')]) { assert.strictEqual(R.removeWorktree(d, x, root).ok, false, x); intact(); }
     // a worktree the user made on their own branch, inside and outside root
     G(d, 'branch', 'feature');
-    const inFeature = W('userwt'), outFeature = path.join(tmp, 'userwt-out');
+    const inFeature = W(path.join('nest', 'userwt')), outFeature = path.join(tmp, 'userwt-out'); // inside root, but not a direct child: the user's
     G(d, 'worktree', 'add', inFeature, 'feature');
     G(d, 'branch', 'feature2');
     G(d, 'worktree', 'add', outFeature, 'feature2');
@@ -512,6 +512,33 @@ try {
     const elsewhere = path.join(tmp, 'elsewhere'); fs.mkdirSync(path.join(elsewhere, 'v1'), { recursive: true }); fs.writeFileSync(path.join(elsewhere, 'v1', 'keep.txt'), 'k');
     const eroot = path.join(tmp, 'eroot'); link(elsewhere, eroot);
     assert(!R.removeWorktree(d, path.join(eroot, 'v1'), eroot).ok); assert(fs.existsSync(path.join(elsewhere, 'v1', 'keep.txt')), 'nothing outside is deleted');
+  });
+  test("a direct child of root named like a task id is the office's own, whatever branch it is on", () => {
+    const d = mk('own'); const base = R.state(d).branch; const before = G(d, 'rev-parse', 'HEAD');
+    const e1 = W('e1'); assert(R.addWorktree(d, e1, 'office/e1', base, root).ok);
+    G(e1, 'checkout', '-q', '-b', 'feature'); fs.writeFileSync(path.join(e1, 'f.txt'), 'f'); G(e1, 'add', '-A'); G(e1, 'commit', '-q', '-m', 'f');
+    const e2 = W('e2'); const r = R.addWorktree(d, e2, 'office/e2', base, root); assert(r.ok, r.err);
+    fs.writeFileSync(path.join(e2, 'g.txt'), 'g'); assert(R.commitAll(d, e2, 'office/e2', root, 'g').committed);
+    assert(R.removeWorktree(d, e2, root).ok);
+    assert(R.removeWorktree(d, e1, root).ok, 'removed whatever its branch'); assert(!fs.existsSync(e1));
+    assert.strictEqual(G(d, 'show', 'feature:f.txt'), 'f', 'its commits stay on its branch');
+    assert.strictEqual(G(d, 'rev-parse', 'HEAD'), before);
+    G(d, 'branch', 'mine'); fs.mkdirSync(W('deeper')); G(d, 'worktree', 'add', path.join(W('deeper'), 'x'), 'mine');
+    assert(!R.addWorktree(d, W('e3'), 'office/e3', base, root).ok, 'a nested user worktree still blocks the root');
+    assert(!R.removeWorktree(d, path.join(W('deeper'), 'x'), root).ok);
+  });
+  test('plainRepo: the folder is the top, .git is a real folder of its own, its key entries are not links', () => {
+    const d = mk('plainr');
+    assert.deepStrictEqual(R.plainRepo(d), { ok: true });
+    fs.mkdirSync(path.join(d, 'sub')); assert(!R.plainRepo(path.join(d, 'sub')).ok, 'a folder inside');
+    const wt = W('pr1'); assert(R.addWorktree(d, wt, 'office/pr1', R.state(d).branch, root).ok);
+    assert(!R.plainRepo(wt).ok, 'a worktree (.git is a file)');
+    assert(!R.plainRepo(path.join(tmp, 'nothing-here')).ok);
+    const other = mk('plainother'), fake = path.join(tmp, 'plainfake'); fs.mkdirSync(path.join(fake, '.git'), { recursive: true });
+    for (const f of ['HEAD', 'config']) fs.copyFileSync(path.join(other, '.git', f), path.join(fake, '.git', f));
+    if (!link(path.join(other, '.git', 'objects'), path.join(fake, '.git', 'objects'))) return console.log('  (skip: links need privileges here)');
+    link(path.join(other, '.git', 'refs'), path.join(fake, '.git', 'refs'));
+    const r = R.plainRepo(fake); assert(!r.ok && r.err, 'shared objects and refs by links');
   });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
