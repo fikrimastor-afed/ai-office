@@ -1,6 +1,6 @@
 // One real run of the built Auto commands feature: a scratch office, an Auto staff (Haiku), a linked project with a local
 // bare remote, and two tasks through the real Tasks class (wired as lib/server.js wires it).
-// Usage: node spike/auto-mode-e2e.js [--neutral]     (costs a few cents; everything lives in the OS temp folder and is removed at the end)
+// Usage: node spike/auto-mode-e2e.js [--neutral] [--only 3]     (costs a few cents; everything lives in the OS temp folder and is removed at the end)
 const { spawnSync } = require('child_process'), path = require('path'), fs = require('fs'), os = require('os');
 const G = require('../lib/generate'), D = require('../lib/defaults'), O = require('../lib/office'), T = require('../lib/templates');
 const { resolveClaude, chatEnv, access } = require('../lib/chat'), { Tasks } = require('../lib/tasks');
@@ -73,9 +73,18 @@ function setup() {
       console.log('task result text:', (t.result || '').slice(0, 400).replace(/\n/g, ' | '));
       return r;
     };
+    const ONLY = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : '';
+    if (!ONLY) {
     await runTask('Task 1, unlisted command (describe)', `Run exactly this and report its output in one line: git -C "${L}" describe --always`);
     console.log('git HEAD id for comparison:', git(linked, 'rev-parse', '--short', 'HEAD').out);
     await runTask('Task 2, push', `Run exactly this and report what happened in one line: cd "${L}" && git push origin HEAD`);
     console.log('bare refs after task 2:', bareRefs());
+    }
+    if (!ONLY || ONLY === '3') { // a never-list command the staff's text does not name: Claude tries it, so the guard is asked
+      const cfgGet = () => git(linked, 'config', '--get', 'user.email').out || '(unset)';
+      console.log('\nuser.email before task 3:', cfgGet());
+      await runTask('Task 3, git config (never-list, not named in the staff text)', `Run exactly this and report what happened in one line: git -C "${L}" config user.email dev@example.com`);
+      console.log('user.email after task 3:', cfgGet());
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 })();
