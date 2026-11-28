@@ -19,6 +19,12 @@ const PRESETS = {
   laravel: { label: 'Laravel', about: 'php artisan (make, migrate, test, route:list, cache, ...)', allow: ['php artisan', 'php -v', 'php -l'] },
   node: { label: 'npm', about: 'npm install, npm ci, npm run, npm test', allow: ['npm install', 'npm i ', 'npm ci', 'npm run', 'npm test', 'npm ls', 'npm outdated'] },
   composer: { label: 'Composer', about: 'composer install, require, update, dump-autoload', allow: ['composer install', 'composer require', 'composer update', 'composer dump-autoload', 'composer show', 'composer outdated', 'composer validate'] },
+  pnpm: { label: 'pnpm', about: 'pnpm install, run, test, ls, outdated', allow: ['pnpm install', 'pnpm i ', 'pnpm run', 'pnpm test', 'pnpm ls', 'pnpm outdated'] },
+  yarn: { label: 'Yarn', about: 'yarn install, run, test, list, outdated', allow: ['yarn install', 'yarn run', 'yarn test', 'yarn list', 'yarn outdated'] },
+  python: { label: 'Python', about: 'pytest, pip install -r requirements, python --version', allow: ['pytest', 'python -m pytest', 'python3 -m pytest', 'pip install -r', 'python -m pip install -r', 'python3 -m pip install -r', 'python --version', 'python3 --version'] },
+  go: { label: 'Go', about: 'go build, test, vet, version', allow: ['go build', 'go test', 'go vet', 'go version'] },
+  rust: { label: 'Rust', about: 'cargo build, test, check, --version', allow: ['cargo build', 'cargo test', 'cargo check', 'cargo --version'] },
+  github: { label: 'GitHub (read only)', about: 'look up issues, pull requests and project items; cannot change anything', allow: ['gh issue view', 'gh issue list', 'gh pr view', 'gh pr list', 'gh pr diff', 'gh project item-list'] },
   docs: { label: 'Office documents', about: 'PowerPoint, Excel, Word, PDF and images (node runs a script saved in the office)', allow: ['node'] },
 };
 // A staff's presets: "docs" is on unless the boss turned it off (docs: false in office.json).
@@ -26,7 +32,9 @@ const cmdsOf = (s) => [...(s && s.docs === false ? [] : ['docs']), ...((s && s.c
 // Never, whatever is ticked: these lose work, publish, or open a door. The boss runs them.
 const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 'git filter-branch', 'git branch -D', 'git checkout --', 'git restore .',
   'php artisan migrate:fresh', 'php artisan migrate:reset', 'php artisan migrate:refresh', 'php artisan db:wipe', 'php artisan tinker', 'php artisan down',
-  'npm publish', 'composer remove', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
+  'npm publish', 'composer remove',
+  'pnpm publish', 'pnpm dlx', 'pnpm exec', 'yarn publish', 'yarn npm publish', 'yarn dlx', 'yarn exec', 'cargo publish', 'cargo install', 'cargo run',
+  'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
 

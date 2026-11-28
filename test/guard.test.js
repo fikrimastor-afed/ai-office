@@ -7,6 +7,7 @@ const office = {
   linked: ['/home/ali/projects/8fix'],
   staff: [
     { id: 'shah', name: 'Shah', commands: ['git', 'laravel'], customCommands: ['php vendor/bin/pint'] },
+    { id: 'irfan', name: 'Irfan', commands: ['pnpm', 'yarn', 'python', 'go', 'rust', 'github'] },
     { id: 'siti', name: 'Siti' },
     { id: 'aina', name: 'Aina', docs: false },
   ],
@@ -104,7 +105,7 @@ test('Windows paths (Git Bash /c/..., backslashes, quotes, WSL share)', () => {
 });
 
 test('presets are what the Staff page offers', () => {
-  assert.deepStrictEqual(Object.keys(PRESETS), ['git', 'laravel', 'node', 'composer', 'docs']);
+  assert.deepStrictEqual(Object.keys(PRESETS), ['git', 'laravel', 'node', 'composer', 'pnpm', 'yarn', 'python', 'go', 'rust', 'github', 'docs']);
 });
 
 test('ask-first actions: only with an unused OK from the boss for that staff and that exact call', () => {
@@ -129,6 +130,21 @@ test('ask-first actions: only with an unused OK from the boss for that staff and
   assert.strictEqual(viaConnector.decision, 'allow', 'same OK works through the claude.ai connector');
   assert.deepStrictEqual([...new Set(Object.keys(ASK_FIRST).map((t) => t.split('__').pop()))].sort(),
     require('../lib/defaults').INVOIS.roles.flatMap((r) => r.askFirst).sort(), 'guard and defaults agree');
+});
+
+test('engineer presets: build and test tools allowed, publishing and arbitrary code refused', () => {
+  const o = { agent: 'irfan' };
+  for (const c of ['pnpm install', 'pnpm run build', 'pnpm test', 'yarn install', 'yarn test', 'pytest -q', 'python -m pytest tests/', 'pip install -r requirements.txt',
+    'go build ./...', 'go test ./...', 'cargo build', 'cargo test', 'cd /home/ali/projects/8fix && cargo check']) allow(c, o);
+  for (const c of ['pnpm publish', 'pnpm dlx cowsay', 'pnpm exec x', 'yarn dlx x', 'yarn npm publish', 'yarn publish', 'cargo publish', 'cargo run', 'cargo install x',
+    'pip install requests', 'python -c "print(1)"', 'python script.py', 'go run .', 'go install x@latest']) deny(c, o);
+  deny('pnpm install', { agent: 'shah' });                    // not ticked for Shah
+});
+
+test('GitHub read only: look things up, never change them', () => {
+  const o = { agent: 'irfan' };
+  for (const c of ['gh issue view 12', 'gh issue view 12 --repo acme/shop --comments', 'gh issue list --label bug', 'gh pr view 5', 'gh pr list', 'gh pr diff 5', 'gh project item-list 3 --owner acme']) allow(c, o);
+  for (const c of ['gh pr merge 5', 'gh issue comment 12 -b hi', 'gh issue close 12', 'gh issue create -t x', 'gh pr create', 'gh api repos/acme/shop', 'gh auth token', 'gh secret list', 'gh repo delete x', 'gh issue view 12 && rm -rf x', 'gh issue view 12 | cat']) deny(c, o);
 });
 
 console.log(`\n${n} guard tests passed`);
