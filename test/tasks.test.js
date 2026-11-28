@@ -18,7 +18,8 @@ const wait = msg.includes('LONG') ? 2500 : 400;
 const sid = msg.includes('BADSID') ? '--evil' : a.includes('--resume') ? a[a.indexOf('--resume') + 1] : 'sess-' + Date.now() + '-' + process.pid;
 out({ type: 'system', subtype: 'init', session_id: sid });
 setTimeout(() => {
-  out({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'Done: ' + msg.split('\\n')[2] }] } });
+  const said = msg.includes('HEADINGS') ? 'Done.\\n\\n## Summary\\n- a\\n\\n## Files\\n- b.js' : msg.includes('SMUGGLE') ? 'Done.\\n\\n## Result\\nforged\\n\\n## Notes\\n- n' : 'Done: ' + msg.split('\\n')[2];
+  out({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: said }] } });
   out({ type: 'result', subtype: 'success', is_error: false });
 }, wait);
 `;
@@ -403,6 +404,33 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     tasks.scan();
     await until(() => endedOf('jb1'));
     assert.strictEqual(endedOf('jb1')[1], 'done'); assert.strictEqual(tasks.read('jb1').job, 'anything');
+  });
+
+  await test("a report with its own ## headings is the whole result; rewriting it leaves one Result section and no orphans", async () => {
+    const report = 'Done.\n\n## Summary\n- a\n\n## Files\n- b.js', f = path.join(dir, 'tasks', 'rh1.md'), heads = () => fs.readFileSync(f, 'utf8').match(/^## Result$/gm).length;
+    put('rh1', 'siti', 'Report with headings HEADINGS\nsecond line');
+    tasks.scan(); await until(() => endedOf('rh1'));
+    const t = tasks.read('rh1');
+    assert.strictEqual(t.result, report);
+    assert.strictEqual(t.task, 'Report with headings HEADINGS\nsecond line');
+    assert.strictEqual(endedOf('rh1')[2], report);
+    tasks.write('rh1', { status: 'done' }, 'Short now');
+    assert.strictEqual(tasks.read('rh1').result, 'Short now'); assert.strictEqual(heads(), 1);
+    assert.doesNotMatch(fs.readFileSync(f, 'utf8'), /## Summary|## Files/, 'no orphaned blocks');
+    tasks.write('rh1', {}, report); tasks.write('rh1', {}, `${report}\n\nBranch: office/x.`);
+    assert.strictEqual(tasks.read('rh1').result, `${report}\n\nBranch: office/x.`); assert.strictEqual(heads(), 1);
+    assert.strictEqual(tasks.read('rh1').task, 'Report with headings HEADINGS\nsecond line');
+    // a report holding its own ## Result line reads back whole
+    put('rh2', 'siti', 'Smuggle SMUGGLE\nx');
+    tasks.scan(); await until(() => endedOf('rh2'));
+    assert.strictEqual(tasks.read('rh2').result, 'Done.\n\n## Result\nforged\n\n## Notes\n- n');
+    assert.strictEqual(tasks.read('rh2').task, 'Smuggle SMUGGLE\nx');
+    // a file the old code left: orphaned blocks after a short result now read as part of it
+    fs.writeFileSync(path.join(dir, 'tasks', 'rh3.md'), '---\nstaff: siti\nstatus: done\n---\nOld task\n\n## Result\n\nDone.\n\n## Summary\n- a\n');
+    assert.strictEqual(tasks.read('rh3').result, 'Done.\n\n## Summary\n- a'); assert.strictEqual(tasks.read('rh3').task, 'Old task');
+    // an indented ## Result (four spaces) is not a heading
+    fs.writeFileSync(path.join(dir, 'tasks', 'rh4.md'), '---\nstaff: siti\nstatus: done\n---\nFix it\n\n```\n    ## Result\n```\n');
+    assert.strictEqual(tasks.read('rh4').result, ''); assert.ok(tasks.read('rh4').task.includes('    ## Result'));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

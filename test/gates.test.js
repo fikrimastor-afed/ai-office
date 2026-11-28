@@ -841,7 +841,8 @@ setInterval(() => {}, 1000);
       const grand = Number(fs.readFileSync(pidFile, 'utf8')), rec = JSON.parse(fs.readFileSync(ledger, 'utf8'));
       assert.strictEqual(Object.keys(rec).length, 1);
       const plainChild = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); // not a group leader
-      fs.writeFileSync(ledger, JSON.stringify({ ...rec, [plainChild.pid]: { cmd: 'npm test', at: 1 } }));
+      const bootNow = Math.round((Date.now() - os.uptime() * 1000) / 1000) * 1000;
+      fs.writeFileSync(ledger, JSON.stringify({ ...rec, [plainChild.pid]: { pid: plainChild.pid, at: Date.now(), boot: bootNow } }));
       const fresh = engine(e2.dir);
       fresh.gates.recover();
       const r = await run;
@@ -893,6 +894,49 @@ setInterval(() => {}, 1000);
       await sleep(200);
       assert.strictEqual(ck.status('q2'), 'stopped', 'its turn in line does nothing');
       assert.deepStrictEqual(ck.ended.filter(([id]) => id === 'q2').map((x) => x[1]), ['stopped']);
+      fs.rmSync(pidFile);
+    });
+  }
+
+  await test('fix nit: the kept output never grows past 6,000 characters while 5 MB streams in', async () => {
+    const { keepTail } = require('../lib/gates');
+    const chunk = `${'y'.repeat(99)}\n`.repeat(655); let kept = '', max = 0;
+    for (let i = 0; i < 80; i++) { kept = keepTail(kept, chunk); max = Math.max(max, kept.length); }
+    assert.ok(max <= 6000, String(max)); assert.strictEqual(kept.length, 6000);
+  });
+
+  await test('fix K1: a record of another boot, an old record, or a process started at another time is dropped, nothing killed', async () => {
+    const e3 = office('stale', 'software'), ledger = path.join(e3.dir, '.office', 'checks.json');
+    const boot = Math.round((Date.now() - os.uptime() * 1000) / 1000) * 1000, linux = process.platform === 'linux';
+    const leader = () => require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+    const a = leader(), b = leader(), c = leader();
+    await sleep(300);
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    fs.mkdirSync(path.dirname(ledger), { recursive: true });
+    fs.writeFileSync(ledger, JSON.stringify({
+      [a.pid]: { pid: a.pid, at: Date.parse('2020-01-01T00:00:00Z'), boot }, // old
+      [b.pid]: { pid: b.pid, at: Date.now(), boot: boot - 3600000 }, // another boot
+      ...(linux ? { [c.pid]: { pid: c.pid, at: Date.now() - 60000, boot } } : {}), // its process started a minute later than recorded
+    }));
+    engine(e3.dir).gates.recover();
+    await sleep(200);
+    assert.ok(alive(a.pid), 'old record: not killed'); assert.ok(alive(b.pid), 'other boot: not killed');
+    if (linux) assert.ok(alive(c.pid), 'start time does not match: not killed');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(ledger, 'utf8')), {}, 'all dropped');
+    for (const x of [a, b, c]) try { process.kill(-x.pid, 'SIGKILL'); } catch { x.kill('SIGKILL'); }
+  });
+
+  if (hasNpm) {
+    await test('fix K1: after a normal shutdown of an office with a check running, the ledger is empty and the check is gone', async () => {
+      const ledger = path.join(tmp, 'shutdown-checks.json'), pidFile = path.join(tmp, 'tree-pid.txt'), rc = path.join(tmp, 'repo-checks');
+      const script = `const fs = require('fs'); const { runCheck } = require(${JSON.stringify(path.resolve(__dirname, '..', 'lib', 'gates'))});
+runCheck(${JSON.stringify(rc)}, 'npm run tree', { ledger: ${JSON.stringify(ledger)} });
+const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)}) && Object.keys(JSON.parse(fs.readFileSync(${JSON.stringify(ledger)}, 'utf8'))).length) { clearInterval(t); process.exit(0); } }, 50);`;
+      const r = spawnSync(process.execPath, ['-e', script], { timeout: 30000, encoding: 'utf8' });
+      assert.strictEqual(r.status, 0, r.stderr);
+      const grand = Number(fs.readFileSync(pidFile, 'utf8'));
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(ledger, 'utf8')), {});
+      await until(() => { try { process.kill(grand, 0); return false; } catch { return true; } }, 3000);
       fs.rmSync(pidFile);
     });
   }
