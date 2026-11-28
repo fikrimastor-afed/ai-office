@@ -12,7 +12,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-repo-'));
 let n = 0;
 const root = path.join(tmp, 'root'); fs.mkdirSync(root);
 const W = (name) => path.join(root, name);
-const test = (name, fn) => { fn(); console.log(`ok ${++n} ${name}`); };
+const test = (name, fn) => { n++; try { fn(); console.log(`ok ${n} ${name}`); } catch (e) { console.log(`FAIL ${n} ${name}: ${e.message.split('\n')[0]}`); process.exitCode = 1; } };
 const G = (cwd, ...a) => { const r = R.git(cwd, a); assert(r.ok, `git ${a.join(' ')}: ${r.err}`); return r.out; };
 const mk = (name) => {
   const d = path.join(tmp, name); fs.mkdirSync(d);
@@ -187,12 +187,14 @@ try {
     if (linked) { assert.strictEqual(R.removeWorktree(d, W('lnk'), root).ok, false); assert(fs.existsSync(path.join(target, 'k'))); }
     intact();
     // a genuine office worktree, registered, and a leftover folder git no longer knows
-    const ow = W('ox');
-    assert(R.addWorktree(d, ow, 'office/x', base, root).ok);
-    assert(R.removeWorktree(d, ow, root).ok);
+    // root holding a user worktree is refused whole (above); a clean root works
+    const root2 = path.join(tmp, 'root2'); fs.mkdirSync(root2);
+    const ow = path.join(root2, 'ox');
+    assert(R.addWorktree(d, ow, 'office/x', base, root2).ok);
+    assert(R.removeWorktree(d, ow, root2).ok);
     assert(!fs.existsSync(ow) && !R.listWorktrees(d).some((w) => w.branch === 'office/x'));
-    const left = W('left'); fs.mkdirSync(left); fs.writeFileSync(path.join(left, 'f'), 'f');
-    assert(R.removeWorktree(d, left, root).ok); assert(!fs.existsSync(left));
+    const left = path.join(root2, 'left'); fs.mkdirSync(left); fs.writeFileSync(path.join(left, 'f'), 'f');
+    assert(R.removeWorktree(d, left, root2).ok); assert(!fs.existsSync(left));
     intact();
   });
 
@@ -212,7 +214,7 @@ try {
     const d = mk('hooks');
     const marks = path.join(tmp, 'marks'); fs.mkdirSync(marks);
     const sh = (name) => `#!/bin/sh\necho x > "${path.join(marks, name)}"\n`;
-    if (process.platform !== 'win32') for (const h of ['pre-commit', 'post-checkout', 'post-merge', 'post-commit', 'commit-msg', 'pre-merge-commit']) {
+    if (process.platform !== 'win32') for (const h of ['pre-push', 'pre-commit', 'post-checkout', 'post-merge', 'post-commit', 'commit-msg', 'pre-merge-commit']) {
       const f = path.join(d, '.git', 'hooks', h); fs.writeFileSync(f, sh(h)); fs.chmodSync(f, 0o755);
     }
     if (process.platform !== 'win32') {
@@ -221,6 +223,9 @@ try {
       spawnSync('git', ['status'], { cwd: d }); // sanity: it would run
       assert(fs.existsSync(path.join(marks, 'fsmonitor')), 'the test setup fires fsmonitor');
       fs.rmSync(path.join(marks, 'fsmonitor'));
+      R.state(d); assert(!fs.existsSync(path.join(marks, 'fsmonitor')), 'state runs no fsmonitor');
+      assert(R.createBranch(d, 'office/zz', R.state(d).branch).ok === false, 'a repo with core.fsmonitor set is refused for changes');
+      G(d, 'config', '--unset', 'core.fsmonitor');
     }
     const base = R.state(d).branch;
     R.createBranch(d, 'office/h', base);
@@ -232,6 +237,8 @@ try {
     assert(R.merge(d, 'office/h', 'office/h1').ok);
     assert(R.merge(d, 'office/h', 'office/h2').ok);
     R.state(d);
+    const bare = path.join(tmp, 'hbare.git'); fs.mkdirSync(bare); G(bare, 'init', '--bare'); G(d, 'remote', 'add', 'origin', bare);
+    assert(R.push(d, 'office/h').ok);
     assert.deepStrictEqual(fs.readdirSync(marks), []);
   });
 
@@ -285,7 +292,79 @@ try {
     assert(R.merge(d, 'office/uj', 'office/u1').ok);
     assert.deepStrictEqual(R.merge(d, 'office/uj', 'office/u2').files, ['café x.txt']);
   });
+
+  test('root is checked: not a file system root, not the project, not a parent, not a link to it', () => {
+    const d = dirty('rootchk'); fs.mkdirSync(path.join(d, 'src')); fs.writeFileSync(path.join(d, 'src', 'f'), 'f');
+    const base = R.state(d).branch; const before = snap(d);
+    const link = path.join(tmp, 'rootlink');
+    let linked = true; try { fs.symlinkSync(d, link, 'dir'); } catch { linked = false; }
+    const calls = [[d + '/src', path.parse(d).root], [d + '/src', d], [d + '/.git', d], [path.join(tmp, 'x1'), tmp]];
+    if (linked) calls.push([link + '/src', link]);
+    for (const [dir, rt] of calls) {
+      assert.strictEqual(R.removeWorktree(d, dir, rt).ok, false, `remove ${dir} in ${rt}`);
+      assert.strictEqual(R.addWorktree(d, path.join(rt, 'zz'), 'office/zz', base, rt).ok, false, `add in ${rt}`);
+    }
+    assert(fs.existsSync(path.join(d, 'src', 'f')) && fs.existsSync(path.join(d, '.git')));
+    assert.strictEqual(snap(d), before);
+    const ok = W('fine'); assert(R.addWorktree(d, ok, 'office/fine', base, root).ok); assert(R.removeWorktree(d, ok, root).ok);
+  });
+
+  test('an unregistered leftover that holds a user worktree is not deleted', () => {
+    const d = mk('r2'); G(d, 'branch', 'feature3');
+    fs.mkdirSync(W('outer'));
+    G(d, 'worktree', 'add', path.join(W('outer'), 'inner'), 'feature3');
+    fs.writeFileSync(path.join(W('outer'), 'inner', 'work.txt'), 'precious');
+    assert.strictEqual(R.removeWorktree(d, W('outer'), root).ok, false);
+    assert(fs.existsSync(path.join(W('outer'), 'inner', 'work.txt')));
+  });
+
+  test('planted git settings: changes are refused and nothing runs; reads still work', () => {
+    const d = mk('plant'); const base = R.state(d).branch;
+    const marks = path.join(tmp, 'pmarks'); fs.mkdirSync(marks);
+    R.createBranch(d, 'office/pj', base);
+    const wt = W('plantwt'); assert(R.addWorktree(d, wt, 'office/pt', 'office/pj', root).ok);
+    const sc = path.join(tmp, 'smudge.sh'); fs.writeFileSync(sc, `#!/bin/sh\necho x > "${path.join(marks, 'smudge')}"\ncat\n`); try { fs.chmodSync(sc, 0o755); } catch { /* win */ }
+    fs.writeFileSync(path.join(d, '.gitattributes'), '* filter=x\n'); G(d, 'add', '-A'); G(d, 'commit', '-m', 'attr');
+    G(d, 'config', 'filter.x.smudge', sc); G(d, 'config', 'filter.x.clean', 'cat');
+    fs.writeFileSync(path.join(wt, 'q.txt'), 'q');
+    for (const r of [R.addWorktree(d, W('plant2'), 'office/p2', 'office/pj', root), R.commitAll(wt, 'q'), R.merge(d, 'office/pj', 'office/pt'), R.createBranch(d, 'office/p3', base), R.removeWorktree(d, wt, root), R.push(d, 'office/pj')]) {
+      assert.strictEqual(r.ok, false); assert(/git settings the office will not run with: .*filter\.x\.smudge/.test(r.err), r.err);
+    }
+    assert.deepStrictEqual(fs.readdirSync(marks), []);
+    assert(R.state(d).ok && R.isRepo(d) && R.listWorktrees(d).length && R.branchExists(d, 'office/pj') === true && R.hasRemote(d, 'origin') === false);
+    assert.strictEqual(R.diffStat(d, base, 'office/pj'), '');
+    G(d, 'config', '--unset-all', 'filter.x.smudge'); G(d, 'config', '--unset-all', 'filter.x.clean');
+    G(d, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f');
+    assert(R.createBranch(d, 'office/p4', base).ok, 'filter.lfs alone is fine');
+    for (const [k, v] of [['remote.origin.push', 'refs/heads/office/pj:refs/heads/main'], ['remote.origin.pushurl', '/nowhere'], ['commit.gpgsign', 'true'], ['alias.x', '!id'], ['include.path', '/x'], ['merge.m.driver', 'cat']]) {
+      G(d, 'config', k, v);
+      assert.strictEqual(R.createBranch(d, 'office/p5', base).ok, false, k);
+      G(d, 'config', '--unset-all', k);
+    }
+    assert(R.safeConfig(d).ok);
+    G(d, 'config', 'remote.origin.push', 'x');
+    assert(R.safeConfig(d).err.includes('remote.origin.push'));
+  });
+
+  test('push sends exactly one named branch; pushTarget shows where', () => {
+    const d = mk('pushone'); const base = R.state(d).branch;
+    const bare = path.join(tmp, 'pbare.git'); fs.mkdirSync(bare); G(bare, 'init', '--bare');
+    G(d, 'remote', 'add', 'origin', bare); G(d, 'push', 'origin', base);
+    const main = G(bare, 'rev-parse', base);
+    R.createBranch(d, 'office/j', base);
+    assert(R.push(d, 'office/j').ok);
+    assert(G(bare, 'branch', '--list', 'office/j')); assert.strictEqual(G(bare, 'rev-parse', base), main);
+    assert.deepStrictEqual(R.pushTarget(d), { ok: true, url: bare });
+    assert.strictEqual(R.push(d, 'office/nope').ok, false, 'a branch that does not exist');
+  });
+
+  test('the no-hooks folder is private to the process', () => {
+    const fixed = path.join(os.tmpdir(), 'ai-office-no-hooks');
+    fs.rmSync(fixed, { recursive: true, force: true }); fs.mkdirSync(fixed); fs.writeFileSync(path.join(fixed, 'planted'), 'x');
+    try { assert(R.state(mk('nh')).ok, 'a planted file in the predictable folder changes nothing'); }
+    finally { fs.rmSync(fixed, { recursive: true, force: true }); }
+  });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
-console.log(`\n${n} repo tests passed`);
+if (process.exitCode) console.log('\nrepo tests FAILED'); else console.log(`\n${n} repo tests passed`);
