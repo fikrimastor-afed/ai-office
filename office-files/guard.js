@@ -54,6 +54,7 @@ const SHORT = { npm: 'dqsnacfglmpCSBDEOPHhvwyL', pnpm: 'dqsnacfglmpCSBDEOPHhvwyL
 const flagHit = (first, x, d) => {
   const nm = (v) => v.replace(/^-+/, '').split('=')[0], n = nm(x), dn = nm(d);
   if (n === dn) return true;
+  if (first === 'git' && /^--/.test(x) && /^--/.test(d)) return n.length >= 2 && dn.startsWith(n); // git reads a long flag shortened (--upload-pac)
   if (first !== 'npm' && first !== 'pnpm') return false;
   return dn.length === 1 ? new RegExp(`^[${SHORT[first]}]+$`).test(n) && n.includes(dn) : n.length >= 3 && dn.startsWith(n);
 };
@@ -89,7 +90,8 @@ function splitCommand(cmd) {
 }
 // A part as the shell reads it: words with every quote and backslash gone.
 // The program name is lower case without .exe, .cmd or .bat (Windows runs git.exe as git).
-const words = (p) => { const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); w[0] = w[0].replace(/\.(exe|cmd|bat)$/i, '').toLowerCase(); return w; };
+const programName = (x) => x.replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+const words = (p) => { const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); w[0] = programName(w[0]); return w; };
 // Wrappers and shells: with these a command can hide another one (an Auto staff has no list to catch them).
 const WRAPPERS = ['env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
 const INTERPRETERS = ['node', 'python', 'python2', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'lua'];
@@ -162,6 +164,8 @@ function decide(input, office, opts = {}) {
       const [first, ...args] = w;
       if (/[\\/]/.test(firstWord(p)[0])) return no('Run the command by its name, not by a path.');
       if (WRAPPERS.includes(first)) return no(`Run the command itself, not through ${first}.`);
+      const code = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
+      if (['node', 'bun', 'deno'].includes(first) && code || (first === 'deno' && ['eval', 'repl'].includes(args[0])) || (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x)))) return no('Save the code in a file in the project and run the file.');
       if (INTERPRETERS.includes(first) && args.some((x) => (/^-[A-Za-z]*[ecrpE]/.test(x) && !/^-m/.test(x)) || /^--(eval|print|command)(=|$)/.test(x))) return no('Save the code in a file in the project and run the file.');
     }
     if (!allowed.some((a) => starts(p, a))) {

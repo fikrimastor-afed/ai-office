@@ -304,4 +304,15 @@ test('fix round 2: Windows program names, git and find flags that run programs, 
   allow('cd /home/ali/office && node projects/raya/make.cjs', { agent: 'shah', cwd: sc });
 });
 
+test('fix round 3: shortened git flags that run programs; inline code through node and deno', () => {
+  for (const who of ['shah', 'priya', 'wei']) for (const c of ['git fetch --upload-pac=x', 'git fetch --upload-p=x', 'git fetch --upl=x', 'git fetch --receive-pac=x', 'git fetch --exe=x', 'git pull --upload-pac=x origin'])
+    assert.strictEqual(run(c, { agent: who }).decision, 'deny', `${who}: ${c}`);
+  for (const c of ['git log --reverse', 'git diff --relative', 'git commit --reset-author', 'git pull --rebase', 'git fetch --recurse-submodules', 'git log --exclude=x', 'git add --update', 'git stash --include-untracked',
+    'git commit --reuse-message=HEAD', 'git fetch --unshallow', 'git fetch --update-head-ok']) { const d = run(c, { agent: 'shah' }).decision; console.log(`   shah ${c}: ${d}`); assert.notStrictEqual(d, 'deny', c); }
+  for (const c of ['node --import=data:text/javascript,1 x.js', 'node --import data:text/javascript,1 x.js', 'node --experimental-loader=data:x,1 x.js', 'bun --loader data:x,1 x.js', 'deno eval "1"', 'deno repl', 'git clone -u x r', 'git ls-remote -u x origin'])
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, 'deny', c);
+  for (const c of ['node --import ./setup.mjs app.js', 'deno run main.ts', 'deno test']) assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
+  console.log(`   shah git branch -u origin/main: ${run('git branch -u origin/main', { agent: 'shah' }).decision}`);
+});
+
 console.log(`\n${n} guard tests passed`);
