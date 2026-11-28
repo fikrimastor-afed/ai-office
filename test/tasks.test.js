@@ -364,6 +364,20 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(tasks.read('h2').result, 'Only the one who asked has the role "Sales", and a staff cannot give a task to themselves.');
   });
 
+  await test('Run again on a role task nobody took keeps the role, and the task waiting for it goes on', async () => {
+    putH('k1', 'role: Plumber', 'Fix the sink'); putH('k2', 'staff: siti\nneeds: k1', 'Quote after the sink');
+    tasks.scan();
+    assert.match(tasks.read('k1').result, /no active staff with the role "Plumber"/);
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.map((s) => (s.id === 'aina' ? { ...s, role: 'Plumber' } : s)) }));
+    const r = tasks.rerun('k1');
+    assert.ok(!r.id.includes('undefined'), r.id); assert.match(r.id, /-plumber(-\d+)?$/);
+    assert.strictEqual(tasks.read(r.id).role, 'Plumber');
+    await until(() => endedOf(r.id) && endedOf('k2'));
+    assert.deepStrictEqual([tasks.read(r.id).status, tasks.read(r.id).staff, tasks.read('k2').status], ['done', 'aina', 'done']);
+    fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

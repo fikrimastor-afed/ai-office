@@ -295,6 +295,20 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         await until(() => t2('w2').includes(`There is no active staff with the role "${role}".`), 30); // well before w1 ends (5 s)
       } finally { await srv2.close(); await new Promise((r) => setTimeout(r, 300)); }
     });
+    await test('archiving the only staff with a role fails a task waiting for that role at once, with no file watch needed', async () => {
+      const put = (id, head, text) => fs.writeFileSync(path.join(dir, 'tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+      const until = async (fn, n = 100) => { for (let i = 0; i < n; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const role = JSON.parse(read('office.json')).staff.find((s) => s.id === 'nurul').role;
+      put('v1', 'staff: nurul', 'LONG busy'); put('v2', `role: ${role}`, 'for the role');
+      await until(async () => (await req('GET', '/api/tasks')).body.active.some((a) => a.id === 'v1'));
+      await until(async () => (await req('GET', '/api/tasks')).body.waiting.some((w) => w.id === 'v2'));
+      assert.strictEqual((await req('POST', '/api/staff/nurul/archive')).status, 200);
+      assert.strictEqual(read('tasks', 'v2.md').match(/There is no active staff with the role "[^"]+"\./)?.[0], `There is no active staff with the role "${role}".`);
+      await req('POST', '/api/tasks/v1/stop');
+      await until(async () => !(await req('GET', '/api/tasks')).body.active.length);
+      assert.strictEqual((await req('POST', '/api/staff/nurul/reactivate')).status, 200);
+      await new Promise((r) => setTimeout(r, 600)); // let the file watch settle before the office is removed
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });
