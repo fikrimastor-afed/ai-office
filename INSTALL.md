@@ -60,15 +60,18 @@ Without that tool, ask in plain text and number the choices.
 
 1. **Company name.** "What is your company or business name?" Free text. If they skip: `My Company Sdn Bhd`.
 
-2. **Office folder.** Suggest a folder named after the company in their home folder, for example
+2. **Kind of office.** "What kind of office?" Choices: Business (default), Software house.
+   Business: sales, finance, admin and the like. Software house: a team of engineers that builds software.
+
+3. **Office folder.** Suggest a folder named after the company in their home folder, for example
    `C:\Users\<name>\kedai-baju-ali` or `~/kedai-baju-ali`. Choices: that folder (default), or somewhere else.
    Avoid OneDrive and other cloud-synced folders: if they pick one, say why it is a bad idea (files sync
    while staff work, which can lock them) and suggest the home folder. If the folder already has an office, ask for another.
 
-3. **Manager's name.** "Your manager runs the office: you talk to them, they hand work to your staff. What should we call your manager?"
+4. **Manager's name.** "Your manager runs the office: you talk to them, they hand work to your staff. What should we call your manager?"
    Choices: Hana (default), or their own name for the manager.
 
-4. **Staff.** "Which staff do you want? Pick 1 to 8." Ask as two multi-select questions in the same message:
+5. **Staff.** "Which staff do you want? Pick 1 to 8." Ask as two multi-select questions in the same message:
 
    | Main team (default: all four) | More staff (optional) |
    |---|---|
@@ -77,20 +80,30 @@ Without that tool, ask in plain text and number the choices.
    | Nurul: Finance | Kumar: HR |
    | Ahmad: Tech | Daniel: Admin |
 
+   For a software house, use this table instead:
+
+   | Main team (default: all five) | More staff (optional) |
+   |---|---|
+   | Zara: Product Analyst | Arif: DevOps Engineer |
+   | Irfan: Backend Engineer | Sofia: Designer |
+   | Wei Jie: Frontend Engineer | |
+   | Priya: QA Engineer | |
+   | Hakim: Reviewer | |
+
    They need at least 1. If they pick nobody, keep the main team.
 
-5. **Changes.** Show the picked staff in a small table (name, role, what they do), then ask:
+6. **Changes.** Show the picked staff in a small table (name, role, what they do), then ask:
    "Want to rename anyone, change what they do, or add your own staff?" Choices: No, looks good (default), or Yes.
    If yes, ask in plain chat. A new staff needs a name, a role, and one line on what they do. Keep the total at 8 or fewer.
    The manager and staff should all have different names: if two match, ask to rename one.
 
-6. **invois.online MCP.** Ask only if a picked staff works in sales or finance (role has "sales", "finance" or "account").
+7. **invois.online MCP.** Skip this for a software house. Otherwise ask only if a picked staff works in sales or finance (role has "sales", "finance" or "account").
    "Do you send quotations or invoices? The invois.online MCP lets your sales and finance staff make real
    quotations and invoices. Free plan: 60 documents a month. Made by the team behind AI Office."
    Choices: No, maybe later (default), or Yes, connect it.
    If yes, say you will help them log in to invois.online after the office is set up.
 
-7. **Confirm.** Show all answers in one small table and ask "Set up the office now?"
+8. **Confirm.** Show all answers in one small table and ask "Set up the office now?"
    Choices: Yes (default), or Change something. On a change, ask only about that item, then confirm again.
 
 ## Step 3: Install
@@ -111,6 +124,7 @@ Without that tool, ask in plain text and number the choices.
    ```
 
    For a default staff you may give only the name: `{ "name": "Nurul" }`.
+   Optional key: `"type": "software"` for a software house (the default is `"business"`). With no `staff`, a software house gets the five main team members.
 
 2. Run the installer with that file. If Node is not on PATH, put its folder first on PATH for this one command:
 

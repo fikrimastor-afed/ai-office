@@ -19,6 +19,10 @@ const answers = {
     .map(({ name, role, job }) => ({ name, role, job })),
 };
 const cfg = G.buildConfig(answers);
+// Stable configs for later tests: fixed port, key and created.
+const fix = (c) => Object.assign(c, { port: 4747, key: '0123456789abcdef0123456789abcdef', created: '2026-11-28T00:00:00.000Z' });
+const businessCfg = fix(G.buildConfig({ company: 'Kedai Ali', pa: 'Hana', staff: D.STAFF.slice(0, 2) }));
+const softwareCfg = fix(G.buildConfig({ company: 'Acme Labs', pa: 'Hana', type: 'software', staff: D.teamOf('software').slice(0, D.SOFTWARE_STAFF_COUNT) }));
 const dir = path.join(tmp, 'office');
 
 test('staff ids are unique, safe and avoid built-in agent names', () => {
@@ -159,6 +163,43 @@ test('a stuck task: again: is documented; the example header keeps staff, role a
   for (const b of blocks) assert.ok(!(/^staff:/m.test(b) && /^role:/m.test(b) && /^continues:/m.test(b)), b);
   assert.ok(blocks.some((b) => /^staff: \w/m.test(b) && /^needs: /m.test(b)), 'main example: staff and needs');
   assert.ok(blocks.some((b) => /^role: \w/m.test(b) && /^staff: *(#.*)?$/m.test(b)), 'a role example with staff empty');
+});
+
+test('software office: type, default team, their commands', () => {
+  const a = { company: 'Acme Labs', pa: 'Hana', type: 'software', staff: D.teamOf('software').slice(0, D.SOFTWARE_STAFF_COUNT).map(({ name, role, job }) => ({ name, role, job })) };
+  const c = G.buildConfig(a);
+  assert.strictEqual(c.type, 'software');
+  assert.deepStrictEqual(c.staff.map((s) => s.role), ['Product Analyst', 'Backend Engineer', 'Frontend Engineer', 'QA Engineer', 'Reviewer']);
+  assert.deepStrictEqual(c.staff.find((s) => s.role === 'Backend Engineer').commands, ['git', 'node']);
+  assert.deepStrictEqual(c.staff.find((s) => s.role === 'Reviewer').commands, ['git']);
+  const j = JSON.parse(T.officeJson(c));
+  assert.strictEqual(j.type, 'software');
+  assert.deepStrictEqual(j.staff.find((s) => s.role === 'QA Engineer').commands, ['git', 'node']);
+  assert.ok(!('commands' in j.staff.find((s) => s.role === 'Product Analyst')));
+  assert.deepStrictEqual(softwareCfg.staff.map((s) => s.id), ['zara', 'irfan', 'wei-jie', 'priya', 'hakim']);
+});
+
+test('business office stays as it was; type helpers', () => {
+  const c = G.buildConfig({ company: 'Kedai Ali', pa: 'Hana', staff: [D.STAFF[0]] });
+  assert.strictEqual(c.type, 'business');
+  assert.ok(!('commands' in JSON.parse(T.officeJson(c)).staff[0]));
+  assert.strictEqual(D.typeOf(undefined), 'business'); assert.strictEqual(D.typeOf(' Software '), 'software'); assert.strictEqual(D.typeOf('saas'), null);
+  assert.strictEqual(D.teamOf('business'), D.STAFF); assert.strictEqual(D.teamOf('software'), D.SOFTWARE_STAFF);
+  assert.strictEqual(businessCfg.type, 'business');
+});
+
+test('answers file: type software gives the default software team; a bad type stops', () => {
+  const bin = path.join(__dirname, '..', 'bin', 'ai-office.js');
+  const run = (ans) => { const f = path.join(tmp, 'ans-type.json'); fs.writeFileSync(f, JSON.stringify(ans));
+    return spawnSync(process.execPath, [bin, '--answers', f, '--skip-check'], { cwd: tmp, encoding: 'utf8' }); };
+  let r = run({ company: 'Acme Labs', type: 'software' });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const o = JSON.parse(read(tmp, 'acme-labs/office.json'));
+  assert.strictEqual(o.type, 'software');
+  assert.deepStrictEqual(o.staff.map((x) => x.id), ['zara', 'irfan', 'wei-jie', 'priya', 'hakim']);
+  assert.deepStrictEqual(o.staff[1].commands, ['git', 'node']);
+  r = run({ company: 'Saas Co', type: 'saas' });
+  assert.strictEqual(r.status, 1); assert.match(r.stdout, /type must be "business" or "software"\./);
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });
