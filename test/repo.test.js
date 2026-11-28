@@ -540,6 +540,35 @@ try {
     link(path.join(other, '.git', 'refs'), path.join(fake, '.git', 'refs'));
     const r = R.plainRepo(fake); assert(!r.ok && r.err, 'shared objects and refs by links');
   });
+  test('plainRepo refuses a link anywhere under .git; a normal repo with a worktree and packed objects passes', () => {
+    const other = mk('victim'); G(other, 'branch', 'office/x');
+    const otherState = () => JSON.stringify([G(other, 'for-each-ref'), G(other, 'count-objects', '-v'), fs.readdirSync(path.join(other, '.git', 'logs', 'refs', 'heads'))]);
+    const before = otherState();
+    const fresh = (name) => { const d = mk(name); G(d, 'branch', 'office/x'); return d; };
+    const objDir = (d) => fs.readdirSync(path.join(d, '.git', 'objects')).find((x) => /^[0-9a-f]{2}$/.test(x));
+    const cases = [
+      ['refs/heads/office', (d) => { fs.rmSync(path.join(d, '.git', 'refs', 'heads', 'office'), { recursive: true }); return link(path.join(other, '.git', 'refs', 'heads', 'office'), path.join(d, '.git', 'refs', 'heads', 'office')); }],
+      ['one objects folder', (d) => { const x = objDir(d), at = path.join(d, '.git', 'objects', x); fs.rmSync(at, { recursive: true }); fs.mkdirSync(path.join(other, '.git', 'objects', x), { recursive: true }); return link(path.join(other, '.git', 'objects', x), at); }],
+      ['logs', (d) => { fs.rmSync(path.join(d, '.git', 'logs'), { recursive: true }); return link(path.join(other, '.git', 'logs'), path.join(d, '.git', 'logs')); }],
+      ['a ref file', (d) => { const f = path.join(d, '.git', 'refs', 'heads', 'office', 'x'); fs.rmSync(f); try { fs.symlinkSync(path.join(other, '.git', 'refs', 'heads', 'office', 'x'), f, 'file'); return true; } catch (e) { if (process.platform === 'win32' && e.code === 'EPERM') return false; throw e; } }],
+      ['three levels deep', (d) => { const at = path.join(d, '.git', 'refs', 'heads', 'deep', 'er'); fs.mkdirSync(at, { recursive: true }); return link(path.join(other, '.git', 'refs'), path.join(at, 'down')); }],
+    ];
+    let skipped = false;
+    for (const [what, plant] of cases) {
+      const d = fresh(`plant-${what.replace(/\W+/g, '-')}`);
+      assert(R.plainRepo(d).ok, `${what}: fine before`);
+      if (!plant(d)) { skipped = true; continue; }
+      const r = R.plainRepo(d); assert(!r.ok && r.err, what);
+    }
+    if (skipped) console.log('  (skip: links need privileges here)');
+    assert.strictEqual(otherState(), before, 'the other repo is unchanged');
+    const ok = mk('plainok'); const base = R.state(ok).branch;
+    for (const n of [1, 2, 3]) { fs.writeFileSync(path.join(ok, `f${n}.txt`), String(n)); G(ok, 'add', '-A'); G(ok, 'commit', '-q', '-m', `c${n}`); }
+    assert(R.addWorktree(ok, W('pok'), 'office/pok', base, root).ok);
+    G(ok, 'gc', '-q');
+    assert.deepStrictEqual(R.plainRepo(ok), { ok: true });
+    assert(R.removeWorktree(ok, W('pok'), root).ok);
+  });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

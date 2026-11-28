@@ -561,6 +561,44 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.ok(!e.tasks.read('nc2').kind); assert.ok(!callOf('Plain follow-up').msg.includes('Work only in'));
   });
 
+  await test("a link anywhere inside an office project's .git holds the task; a normal project with packed objects works", async () => {
+    const victim = mkRepo('victim2'); git(victim, 'branch', 'office/x');
+    const vstate = () => JSON.stringify([git(victim, 'for-each-ref'), git(victim, 'count-objects', '-v'), fs.readdirSync(path.join(victim, '.git', 'logs', 'refs', 'heads'))]);
+    const before = vstate(), vg = path.join(victim, '.git');
+    const lk = (target, at, type = 'dir') => { try { fs.symlinkSync(target, at, type); return true; } catch (e) { if (process.platform === 'win32' && e.code === 'EPERM') return false; throw e; } };
+    const plants = [
+      ['refs office', (g) => { fs.rmSync(path.join(g, 'refs', 'heads', 'office'), { recursive: true }); return lk(path.join(vg, 'refs', 'heads', 'office'), path.join(g, 'refs', 'heads', 'office')); }],
+      ['objects xx', (g) => { const x = fs.readdirSync(path.join(g, 'objects')).find((y) => /^[0-9a-f]{2}$/.test(y)), at = path.join(g, 'objects', x); fs.rmSync(at, { recursive: true }); fs.mkdirSync(path.join(vg, 'objects', x), { recursive: true }); return lk(path.join(vg, 'objects', x), at); }],
+      ['logs', (g) => { fs.rmSync(path.join(g, 'logs'), { recursive: true }); return lk(path.join(vg, 'logs'), path.join(g, 'logs')); }],
+      ['ref file', (g) => { const f = path.join(g, 'refs', 'heads', 'office', 'x'); fs.rmSync(f); return lk(path.join(vg, 'refs', 'heads', 'office', 'x'), f, 'file'); }],
+      ['deep', (g) => { const at = path.join(g, 'refs', 'heads', 'a', 'b'); fs.mkdirSync(at, { recursive: true }); return lk(path.join(vg, 'refs'), path.join(at, 'c')); }],
+    ];
+    let i = 0, skipped = false;
+    for (const [what, plant] of plants) {
+      const p = project(soft2, `Planted ${++i}`), code = path.join(soft2.dir, 'projects', p, 'code');
+      assert.ok(R.ensureRepo(code).ok); git(code, 'branch', 'office/x');
+      if (!plant(path.join(code, '.git'))) { skipped = true; continue; }
+      soft2.put(`pl${i}`, `staff: ${t0}\nproject: ${p}\njob: pj${i}\nkind: code`, `Planted ${what}\nWRITE p.txt p`);
+      soft2.job(`pj${i}`, p); soft2.jobs.setStatus(`pj${i}`, 'approved'); soft2.tasks.scan(); await sleep(300);
+      assert.strictEqual(soft2.status(`pl${i}`), 'new', what);
+      assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === `pl${i}`).reason, CODE_BAD, what);
+      soft2.tasks.stop(`pl${i}`);
+    }
+    if (skipped) console.log('  (skip: links need privileges here)');
+    assert.strictEqual(vstate(), before, 'the other repo is unchanged');
+    const pn = project(soft2, 'Normal own'), code = path.join(soft2.dir, 'projects', pn, 'code');
+    soft2.put('na1', `staff: ${t0}\nproject: ${pn}\njob: nj\nkind: code`, 'Normal one\nWRITE a1.txt 1');
+    soft2.job('nj', pn); soft2.jobs.setStatus('nj', 'approved'); soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('na1')));
+    assert.strictEqual(soft2.status('na1'), 'done', soft2.tasks.read('na1').result);
+    git(code, 'gc', '-q');
+    soft2.put('na2', `staff: ${t0}\nproject: ${pn}\njob: nj\nkind: code`, 'Normal two\nWRITE a2.txt 2');
+    soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('na2')));
+    assert.strictEqual(soft2.status('na2'), 'done', soft2.tasks.read('na2').result);
+    assert.strictEqual(show(code, 'office/nj:a1.txt'), '1'); assert.strictEqual(show(code, 'office/nj:a2.txt'), '2');
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} gates tests passed`);
 })().catch((e) => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* left */ } console.error(e); process.exit(1); });
