@@ -231,6 +231,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.filter((s) => s.id !== 'siti') }));
     tasks.scan();
     assert.strictEqual(tasks.read('r7').result, 'There is no active staff with the role "Sales".');
+    assert.strictEqual(ended.filter((e) => e[0] === 'r7').length, 1, 'the requester is told once');
     fs.writeFileSync(f, JSON.stringify(cfg)); tasks.stopAll(); await until(() => tasks.active().length === 0);
   });
 
