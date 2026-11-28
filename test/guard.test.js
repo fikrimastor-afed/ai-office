@@ -165,4 +165,11 @@ test('flags that run a program or delete a folder are refused, whatever allowed 
   for (const c of ['go test ./... -run TestExec', 'cargo test config_loads', 'pytest tests/test_basetemp.py']) allow(c, o);
 });
 
+test('the flag check sees through quotes, backslashes and double dashes', () => {
+  const o = { agent: 'irfan' };
+  for (const c of ['go test --exec sh', 'go test --exec=sh ./...', 'go build --toolexec ./x', 'go vet --vettool=./x', 'go test -ex""ec sh', "go test -e'x'ec sh", 'go test "--exec" sh',
+    "cargo build '--config' x", 'pytest --base"temp"=/x', 'go test -ex\\ec sh']) deny(c, o);
+  for (const c of ['go test ./... -run TestExec', 'go test ./exec/...', 'cargo test config_loads', 'pytest tests/test_basetemp.py', 'pytest -k "exec or config"']) allow(c, o);
+});
+
 console.log(`\n${n} guard tests passed`);

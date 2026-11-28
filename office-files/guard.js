@@ -88,8 +88,8 @@ function decide(input, office, opts = {}) {
     return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
   }
   for (const p of parts) {
-    const w = p.split(/\s+/).map((x) => x.replace(/^["']|["']$/g, ''));
-    const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && (x === d || x.startsWith(`${d}=`))));
+    const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); // as the shell reads it: quotes and backslashes vanish
+    const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && /^-/.test(x) && x.replace(/^-+/, '').split('=')[0] === d.replace(/^-+/, '')));
     if (f) return opts.chat ? { decision: 'deny', reason: `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
   }
   if (!staff) return no(`${name} does not run commands. Hand it to a staff who has commands turned on (Staff page).`);
