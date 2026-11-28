@@ -31,7 +31,7 @@ const PRESETS = {
 const cmdsOf = (s) => [...(s && s.docs === false ? [] : ['docs']), ...((s && s.commands) || []).filter((k) => k !== 'docs')];
 // The manager may be given these presets only (office.json pa.commands); anything else there is ignored.
 const MANAGER_PRESETS = ['github'];
-const managerCmds = (pa) => ((pa && pa.commands) || []).filter((k) => MANAGER_PRESETS.includes(k));
+const managerCmds = (pa) => (Array.isArray(pa && pa.commands) ? pa.commands : []).filter((k) => MANAGER_PRESETS.includes(k));
 // Never, whatever is ticked: these lose work, publish, or open a door. The boss runs them.
 const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 'git filter-branch', 'git branch -D', 'git checkout --', 'git restore .',
   'php artisan migrate:fresh', 'php artisan migrate:reset', 'php artisan migrate:refresh', 'php artisan db:wipe', 'php artisan tinker', 'php artisan down',
@@ -95,7 +95,9 @@ function decide(input, office, opts = {}) {
     const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && /^-/.test(x) && x.replace(/^-+/, '').split('=')[0] === d.replace(/^-+/, '')));
     if (f) return opts.chat ? { decision: 'deny', reason: `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
   }
-  const mgr = managerCmds(office.pa);
+  // The manager's list needs positive proof: a dashboard chat started as the manager (AI_OFFICE_WHO=pa), no subagent, not in a staff folder.
+  const underStaff = P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff';
+  const mgr = !staff && opts.chat && opts.who === 'pa' && !input.agent_type && !underStaff ? managerCmds(office.pa) : [];
   if (!staff && !mgr.length) return no(`${name} does not run commands. Hand it to a staff who has commands turned on (Staff page).`);
   const allowed = staff ? [...cmdsOf(staff).flatMap((k) => (PRESETS[k] ? PRESETS[k].allow : [])), ...(staff.customCommands || [])] : mgr.flatMap((k) => PRESETS[k].allow);
   if (!allowed.length) return no(`${name} has no commands turned on. The boss can tick them on the Staff page.`);
@@ -206,7 +208,7 @@ if (require.main === module) {
         if (m) linked.push(m[1]);
       }
     } catch { /* no projects */ }
-    const r = decide(input, { ...office, dir, linked }, { chat: process.env.AI_OFFICE_CHAT === '1' });
+    const r = decide(input, { ...office, dir, linked }, { chat: process.env.AI_OFFICE_CHAT === '1', who: process.env.AI_OFFICE_WHO });
     if (!r.decision) return; // terminal: Claude Code asks the boss as usual
     say(r);
   });

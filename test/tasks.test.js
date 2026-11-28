@@ -12,7 +12,7 @@ const fake = `
 const fs = require('fs');
 const a = process.argv.slice(2);
 const msg = a[a.indexOf('-p') + 1];
-fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, cwd: process.cwd(), at: Date.now() }) + '\\n');
+fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, cwd: process.cwd(), at: Date.now(), who: process.env.AI_OFFICE_WHO }) + '\\n');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const wait = msg.includes('LONG') ? 2500 : 400;
 const sid = msg.includes('BADSID') ? '--evil' : a.includes('--resume') ? a[a.indexOf('--resume') + 1] : 'sess-' + Date.now() + '-' + process.pid;
@@ -63,6 +63,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(t.task, 'Quote 50 t-shirts for Kedai Ali');
     const c = calls()[0];
     assert.strictEqual(path.resolve(c.cwd), path.resolve(dir, 'staff', 'siti'));
+    assert.strictEqual(c.who, 'siti', 'a task run is marked with its staff, never pa');
     assert.ok(!c.args[c.args.indexOf('--tools') + 1].includes('Agent'), 'staff cannot hand work on');
     assert.ok(!c.args.includes('--resume'), 'each task starts fresh');
   });

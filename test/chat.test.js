@@ -11,7 +11,7 @@ fs.mkdirSync(bin);
 const fake = `
 const fs = require('fs');
 const a = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, cwd: process.cwd() }) + '\\n');
+fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, cwd: process.cwd(), who: process.env.AI_OFFICE_WHO }) + '\\n');
 const msg = a[a.indexOf('-p') + 1];
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 out({ type: 'system', subtype: 'init', session_id: 'sess-1' });
@@ -143,6 +143,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     chats.send('siti', 'hi');
     await idle('siti');
     const c = calls().pop();
+    assert.strictEqual(c.who, 'siti', 'a staff run is never marked pa');
     const allowed = c.args[c.args.indexOf('--allowedTools') + 1].split(',');
     const T = require('../lib/templates');
     assert.deepStrictEqual(allowed, [...T.officeRules(dir), ...T.officeRules(ext)]);
@@ -193,6 +194,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     const cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
     const tools = () => { const c = calls().pop(); return [c.args[c.args.indexOf('--tools') + 1], c.args[c.args.indexOf('--append-system-prompt') + 1]]; };
     chats.send('pa', 'any issue?'); await idle('pa');
+    assert.strictEqual(calls().pop().who, 'pa', 'the manager run is marked');
     let [t, note] = tools();
     assert.ok(!t.includes('Bash')); assert.ok(!/gh issue view/.test(note));
     cfg.pa.commands = ['github', 'git']; fs.writeFileSync(f, JSON.stringify(cfg));

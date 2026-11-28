@@ -173,7 +173,7 @@ test('the flag check sees through quotes, backslashes and double dashes', () => 
 });
 
 test('the manager: no commands unless GitHub is ticked, then only GitHub look-ups', () => {
-  const asPa = (command, off) => decide({ tool_name: 'Bash', tool_input: { command }, cwd: off.dir }, off, { chat: true, win: false });
+  const asPa = (command, off) => decide({ tool_name: 'Bash', tool_input: { command }, cwd: off.dir }, off, { chat: true, win: false, who: 'pa' });
   assert.strictEqual(asPa('gh issue view 12', office).decision, 'deny');
   assert.ok(/does not run commands/.test(asPa('gh issue view 12', office).reason), 'nothing ticked: today\'s text');
   const withGh = { ...office, pa: { name: 'Hana', commands: ['github', 'git'] } };   // 'git' must be ignored
@@ -184,6 +184,23 @@ test('the manager: no commands unless GitHub is ticked, then only GitHub look-up
   assert.match(asPa('git status', withGh).reason, /can only look things up on GitHub/);
   const onlyGit = { ...office, pa: { name: 'Hana', commands: ['git'] } };
   assert.ok(/does not run commands/.test(asPa('git status', onlyGit).reason), 'a value other than github is ignored');
+});
+
+test('the manager list needs the manager\'s own dashboard chat; a bad pa.commands breaks nobody', () => {
+  const gh = { ...office, pa: { name: 'Hana', commands: ['github'] } };
+  const d = (cwd, o, extra = {}, opts = {}) => decide({ tool_name: 'Bash', tool_input: { command: 'gh issue view 1' }, cwd, ...extra }, o, { chat: true, win: false, ...opts });
+  assert.strictEqual(d(gh.dir, gh, {}, { who: 'pa' }).decision, 'allow');
+  const old = (r) => /does not run commands/.test(r.reason);
+  for (const r of [d('/home/ali/projects/8fix', gh), d(gh.dir, gh), d(gh.dir + '/staff/ghost', gh, {}, { who: 'pa' }), d(gh.dir, gh, { agent_type: 'general-purpose' }, { who: 'pa' }), d(gh.dir, gh, {}, { who: 'aina' })]) {
+    assert.strictEqual(r.decision, 'deny'); assert.ok(old(r), r.reason);
+  }
+  assert.strictEqual(d(gh.dir, gh, {}, { who: 'pa', chat: false }).decision, null, 'terminal: no decision');
+  for (const bad of ['github', { github: true }, 7, null]) {
+    const o = { ...office, pa: { name: 'Hana', commands: bad } };
+    assert.strictEqual(run('git status', { agent: 'shah' }).decision, 'allow');
+    assert.strictEqual(decide({ tool_name: 'Bash', tool_input: { command: 'git status' }, agent_type: 'shah', cwd: o.dir }, o, { chat: true, win: false }).decision, 'allow');
+    assert.ok(old(decide({ tool_name: 'Bash', tool_input: { command: 'gh issue view 1' }, cwd: o.dir }, o, { chat: true, win: false, who: 'pa' })));
+  }
 });
 
 console.log(`\n${n} guard tests passed`);
