@@ -346,4 +346,33 @@ test('final 8: an Auto staff may run a program by a path inside the project, nev
   assert.strictEqual(run('/usr/bin/make', { agent: 'wei' }).reason, 'Run the command by its name, or by a path inside the project (like ./vendor/bin/phpunit), not by a full path.');
 });
 
+test('final 4: a folder with an apostrophe in its name can be used', () => {
+  const ali = { ...office, linked: ["/work/Ali's Shop"] };
+  const r = (command) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: 'shah', cwd: ali.dir }, ali, { chat: true, win: false }).decision;
+  assert.strictEqual(r('cd "/work/Ali\'s Shop" && git status'), 'allow');
+  assert.strictEqual(r('git -C "/work/Ali\'s Shop" status'), 'allow');
+  for (const c of ["cd ''/etc && git status", 'cd "/work/Ali"\'s Shop\' && git status', "git -C \"/work/Ali\"'s Shop' status", "cd /work/Ali's && git status"]) assert.strictEqual(r(c), 'deny', c);
+  const w = { dir: 'C:\\Users\\Ali\\office', linked: ["C:\\Work\\Ali's Shop"], staff: office.staff };
+  const rw = (command) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: 'shah', cwd: w.dir }, w, { chat: true, win: true }).decision;
+  assert.strictEqual(rw('git -C "C:\\Work\\Ali\'s Shop" status'), 'allow');
+  assert.strictEqual(rw('cd "C:\\Work\\Ali\'s Shop" && git status'), 'allow');
+});
+
+test('final 5: npx is the boss\'s to list; for an Auto staff it is a wrapper', () => {
+  const o = { ...office, staff: [...office.staff, { id: 'pret', name: 'Pret', customCommands: ['npx prettier'] }] };
+  const r = (command, agent) => decide({ tool_name: 'Bash', tool_input: { command }, agent_type: agent, cwd: o.dir }, o, { chat: true, win: false });
+  assert.strictEqual(r('npx prettier --write .', 'pret').decision, 'allow');
+  assert.strictEqual(r('npx prettier --write .', 'shah').decision, 'deny');
+  assert.match(r('npx prettier --write .', 'shah').reason, /is not on Shah's allowed commands/);
+  for (const [c, wr] of [['npx prettier --write .', 'npx'], ['npm exec cowsay', 'npm exec'], ['bunx x', 'bunx']]) {
+    const x = r(c, 'wei');
+    assert.strictEqual(x.decision, 'deny', c); assert.strictEqual(x.reason, `Run the command itself, not through ${wr}.`, c);
+  }
+});
+
+test('final 10: pnpm passes the words after the script name to the script', () => {
+  for (const c of ['pnpm test -g "login"', 'pnpm run e2e -g x', 'pnpm test -- -g pat']) allow(c, { agent: 'irfan' });
+  for (const c of ['pnpm install -g x', 'pnpm -g install', 'pnpm add --global x', 'pnpm -C /tmp test', 'pnpm exec x']) deny(c, { agent: 'irfan' });
+});
+
 console.log(`\n${n} guard tests passed`);

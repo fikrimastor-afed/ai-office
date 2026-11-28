@@ -38,7 +38,7 @@ const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 
   'npm publish', 'composer remove', 'yarn global',
   'pnpm publish', 'pnpm dlx', 'pnpm exec', 'yarn publish', 'yarn npm publish', 'yarn dlx', 'yarn exec', 'cargo publish', 'cargo install', 'cargo run',
   'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp',
-  'git config', 'git send-pack', 'unlink ', 'shred ', 'npx', 'npm exec', 'bunx'];
+  'git config', 'git send-pack', 'unlink ', 'shred '];
 // Flags that make an allowed command run any program or delete a folder anywhere, or move it outside the allowed
 // folders (MOVE_FLAGS): refused whatever allowed the command. Case matters (go test -c is fine).
 const DENY_FLAGS = { go: ['-exec', '-toolexec', '-vettool', '-C'], cargo: ['--config', '--manifest-path', '-C'], pytest: ['--basetemp'], python: ['--basetemp'], python3: ['--basetemp'],
@@ -60,9 +60,12 @@ const flagHit = (first, x, d) => {
 };
 
 // The first refused flag in a command's words, with the reason: '' when there is none.
+// pnpm passes what follows "pnpm test", "pnpm start" or "pnpm run <script>" to the script: its own words end there.
+const pnpmOwn = (w) => (['test', 'start'].includes(w[1]) ? 2 : w[1] === 'run' && w[2] && !/^-/.test(w[2]) ? 3 : w.length);
 function flagRefusal(w) {
-  const ws = w[0] === 'npm' && w.includes('--') ? w.slice(0, w.indexOf('--')) : w; // npm: words after a bare -- belong to the script
-  const f = (DENY_FLAGS[w[0]] || []).find((d) => ws.some((x, k) => k && /^-/.test(x) && flagHit(w[0], x, d)));
+  // npm: words after a bare -- belong to the script; pnpm: a -g after the script name is the script's (-C and --dir are still checked)
+  const reach = (d) => (w[0] === 'npm' && w.includes('--') ? w.slice(0, w.indexOf('--')) : w[0] === 'pnpm' && GLOBAL_FLAGS.includes(d) ? w.slice(0, pnpmOwn(w)) : w);
+  const f = (DENY_FLAGS[w[0]] || []).find((d) => reach(d).some((x, k) => k && /^-/.test(x) && flagHit(w[0], x, d)));
   if (!f) return '';
   return GLOBAL_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: it installs outside the project.` : MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.`;
 }
@@ -101,7 +104,7 @@ function splitCommand(cmd) {
 const programName = (x) => x.replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
 const words = (p) => { const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, '')); w[0] = programName(w[0]); return w; };
 // Wrappers and shells: with these a command can hide another one (an Auto staff has no list to catch them).
-const WRAPPERS = ['env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
+const WRAPPERS = ['npx', 'npm exec', 'bunx', 'env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
 const INTERPRETERS = ['node', 'python', 'python2', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'lua'];
 const PLAIN = /^[A-Za-z0-9_.+-]+$/; // a program name, or one folder name in a path
 const NEVER_PROGRAMS = [...new Set(ALWAYS_DENY.map((d) => d.trim().split(' ')[0]))]; // git, rm, curl, ...: run by name only
@@ -164,8 +167,9 @@ function decide(input, office, opts = {}) {
   const inside = (d) => { if (!d) return false; const x = norm(d); return places.some((pl) => x === pl || x.startsWith(pl + P.sep)); };
   const elsewhere = no(`${name} may only work in the office folder or a linked folder.`);
   let i = 0, base = input.cwd || office.dir; // relative folders and scripts are read from base (the cd folder, once there is one)
-  // A folder as typed, only when it has no quote or (outside Windows) backslash left inside: then the shell reads it as written.
-  const folder = (a) => { const x = a.replace(/^(["'])([\s\S]*)\1$/, '$2'); return !x || x.startsWith('-') || /["']/.test(x) || (!win && x.includes('\\')) ? null : realPath(x, base, win); };
+  // A folder as typed, with one outer pair of quotes taken off: only when no quote of that kind (none at all when
+  // unquoted) or, outside Windows, backslash is left inside, so the shell reads it as written (Ali's Shop is fine).
+  const folder = (a) => { const m = /^(["'])([\s\S]*)\1$/.exec(a), x = m ? m[2] : a; return !x || x.startsWith('-') || (m ? x.includes(m[1]) : /["']/.test(x)) || (!win && x.includes('\\')) ? null : realPath(a, base, win); };
   const isCd = (p) => words(p)[0] === 'cd';
   if (isCd(parts[0])) {
     const [, args] = firstWord(parts[0]), [dirArg, rest] = firstWord(args);
@@ -195,7 +199,8 @@ function decide(input, office, opts = {}) {
         const f = flagRefusal([first, ...args]);
         if (f) return no(f);
       } else if (!PLAIN.test(prog)) return no('Run one plain command: start with the program\'s name.');
-      if (WRAPPERS.includes(first)) return no(`Run the command itself, not through ${first}.`);
+      const wrap = WRAPPERS.find((x) => starts([first, ...args].join(' '), x));
+      if (wrap) return no(`Run the command itself, not through ${wrap}.`);
       const code = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
       if (['node', 'bun', 'deno'].includes(first) && code || (first === 'deno' && ['eval', 'repl'].includes(args[0])) || (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x)))) return no('Save the code in a file in the project and run the file.');
       if (INTERPRETERS.includes(first) && inlineCode(first, args)) return no('Save the code in a file in the project and run the file.');
