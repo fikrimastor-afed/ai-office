@@ -522,7 +522,59 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         await until(async () => ['approved', 'working', 'done'].includes((await jobOf('p4') || {}).status));
         assert.strictEqual(fs.readdirSync(w('approvals')).length, count, 'no approval file for an auto-approved plan');
         assert.ok((await req5('GET', '/api/chat/pa')).body.messages.some((m) => m.text === 'Started the job "Auto plan" (plans are set to start without asking).'));
+        // F3: with auto on, a job whose plan card is already waiting is left to the boss
+        await req5('PUT', '/api/auto-approve-plans', { on: false });
+        mkjob('p6', 'Waiting plan'); mk('t6', 'staff: siti\njob: p6', 'Waits');
+        await until(async () => (await plans()).some((x) => x.ref === 'p6'));
+        await req5('PUT', '/api/auto-approve-plans', { on: true });
+        await new Promise((r) => setTimeout(r, 600));
+        const c6 = (await plans()).find((x) => x.ref === 'p6');
+        assert.strictEqual((await jobOf('p6')).status, 'planned'); assert.strictEqual(c6.status, 'pending');
+        mkjob('p7', 'After auto'); mk('t7', 'staff: siti\njob: p7', 'Goes');
+        await until(async () => ['approved', 'working', 'done'].includes((await jobOf('p7') || {}).status));
+        assert.ok(!(await plans()).some((x) => x.ref === 'p7'), 'a new job after auto is on gets no card');
+        assert.strictEqual((await req5('POST', `/api/approvals/${c6.id}/decide`, { decision: 'approved' })).status, 200);
+        assert.ok(['approved', 'working', 'done'].includes((await jobOf('p6')).status));
+        // M2: deciding a card whose job is no longer planned: 409, nothing written
+        await req5('PUT', '/api/auto-approve-plans', { on: false });
+        mkjob('p8', 'Stale plan'); mk('t8', 'staff: siti\njob: p8', 'Stale');
+        await until(async () => (await plans()).some((x) => x.ref === 'p8'));
+        const c8 = (await plans()).find((x) => x.ref === 'p8');
+        new (require('../lib/jobs').Jobs)(dir5).setStatus('p8', 'stopped');
+        const st = await req5('POST', `/api/approvals/${c8.id}/decide`, { decision: 'approved' });
+        assert.strictEqual(st.status, 409); assert.strictEqual(st.body.error, 'That plan is no longer waiting for an OK.');
+        assert.match(fs.readFileSync(w('approvals', `${c8.id}.md`), 'utf8'), /status: pending/);
+        // M1: the job file goes: the office removes its own pending card
+        mkjob('p9', 'Gone plan'); mk('t9', 'staff: siti\njob: p9', 'Gone');
+        await until(async () => (await plans()).some((x) => x.ref === 'p9'));
+        const c9 = (await plans()).find((x) => x.ref === 'p9');
+        fs.unlinkSync(w('jobs', 'p9.md'));
+        await until(() => !fs.existsSync(w('approvals', `${c9.id}.md`)));
+        assert.ok(fs.existsSync(w('approvals', 'x.md')), 'only the office\'s own card is removed');
       } finally { await srv5.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
+    });
+    await test('plan card is built from the job and its current tasks; the approval file text is never shown', async () => {
+      const dir6 = path.join(tmp, 'office6'); const cfg6 = G.buildConfig({ company: 'Six', pa: 'Hana', staff: D.STAFF.slice(0, 3).map(({ name, role, job }) => ({ name, role, job })) }); G.writeOffice(dir6, cfg6);
+      const req6 = (m, u, b) => req(m, u, b, { 'x-office-key': cfg6.key });
+      const srv6 = createServer(dir6), p0 = port; port = await srv6.listen(0);
+      const until = async (fn, n = 100) => { for (let i = 0; i < n; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const w = (...p) => path.join(dir6, ...p);
+      const mk = (id, head, text) => fs.writeFileSync(w('tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+      const card = async () => (await req6('GET', '/api/approvals')).body.find((a) => a.kind === 'plan');
+      try {
+        fs.writeFileSync(w('jobs', 'f1.md'), '---\nproject:\n---\nBig launch\n\nPlan\n'); mk('a1', 'staff: siti\njob: f1', 'First task');
+        await until(async () => !!(await card()));
+        const id = (await card()).id;
+        mk('a2', 'staff: nurul\njob: f1\nneeds: a1', 'Second task'); mk('a3', 'staff: siti\njob: f1', 'Third task');
+        await until(async () => (await card()).details.includes('Third task'));
+        let c = await card();
+        assert.ok(c.details.includes('First task') && c.details.includes('Second task, after a1'), c.details);
+        fs.writeFileSync(w('approvals', `${id}.md`), '---\nfrom: Office\naction: Start the job "Typo fix"\nstatus: pending\n---\n- Siti: fix a typo in README\n');
+        await new Promise((r) => setTimeout(r, 500));
+        for (const got of [await card(), (await req6('GET', `/api/approvals/${id}`)).body]) {
+          assert.strictEqual(got.action, 'Start the job "Big launch"'); assert.ok(got.details.includes('First task') && got.details.includes('Third task') && !got.details.includes('typo'), got.details);
+        }
+      } finally { await srv6.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
     });
   } finally {
     await srv.close();

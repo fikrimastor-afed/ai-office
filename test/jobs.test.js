@@ -144,6 +144,21 @@ fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
     assert.ok(!('m1' in reg()) && reg().m2.status === 'approved');
   });
 
+  await test('plan approval record: planApproval, setPlanApproval, jobOfApproval (null entries do not throw), sync reports dropped jobs', async () => {
+    const jf = path.join(dir, 'jobs', 'pa1.md'), regf = path.join(dir, '.office', 'jobs.json');
+    fs.writeFileSync(jf, '---\nproject:\n---\nPlan job\n'); jobs.sync();
+    assert.strictEqual(jobs.planApproval('pa1'), ''); assert.strictEqual(jobs.jobOfApproval('ap-1'), '');
+    jobs.setPlanApproval('nope', 'ap-x'); assert.strictEqual(jobs.jobOfApproval('ap-x'), '', 'unknown job: nothing recorded');
+    jobs.setPlanApproval('pa1', 'ap-1');
+    assert.strictEqual(jobs.planApproval('pa1'), 'ap-1'); assert.strictEqual(jobs.jobOfApproval('ap-1'), 'pa1');
+    jobs.setStatus('pa1', 'approved'); assert.strictEqual(jobs.planApproval('pa1'), 'ap-1', 'a status change keeps the record');
+    const r = JSON.parse(fs.readFileSync(regf, 'utf8')); r.zz = null; r.yy = 'x'; fs.writeFileSync(regf, JSON.stringify(r));
+    assert.strictEqual(jobs.jobOfApproval('ap-1'), 'pa1'); assert.strictEqual(jobs.planApproval('zz'), '');
+    fs.rmSync(jf); const out = jobs.sync();
+    assert.deepStrictEqual(out.dropped.filter((d) => d.id === 'pa1'), [{ id: 'pa1', planApproval: 'ap-1' }]);
+    assert.strictEqual(jobs.jobOfApproval('ap-1'), '');
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} job tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });
