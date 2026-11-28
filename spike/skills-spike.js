@@ -42,9 +42,10 @@ function show(r) {
   console.log('skill calls:', JSON.stringify(r.skillCalls), '\nreply:', (r.result && r.result.result || r.text || '').slice(0, 400).replace(/\n/g, ' | '));
 }
 (async () => {
+try {
   const ready = 'Reply with the single word: ready';
   const A = await run('A baseline', BASE, ready);
-  if (!A.init) { console.log('claude did not start a session (not logged in?):', A.stderr.slice(0, 200) || 'timeout'); process.exit(2); }
+  if (!A.init) { console.log('claude did not start a session (not logged in?):', A.stderr.slice(0, 200) || 'timeout'); process.exitCode = 2; return; }
   const As = await run('A2 baseline + --strict-mcp-config', BASE, ready, { strict: true });
   const B = await run('B Skill tool', WITH, ready);
   const Bs = await run('B2 Skill tool + --strict-mcp-config', WITH, ready, { strict: true });
@@ -57,5 +58,5 @@ function show(r) {
   for (const r of all) { const x = u(r), i = r.init || {}; console.log(`| ${r.label} | ${x.input_tokens} | ${x.cache_creation_input_tokens} | ${x.cache_read_input_tokens} | ${x.output_tokens} | ${r.result && r.result.total_cost_usd} | ${(i.skills || []).length} | ${(i.tools || []).includes('Skill')} | ${r.skillCalls.length} |`); }
   console.log(`\nB minus A, input + cache-creation: ${inTok(B) - inTok(A)}; B2 minus A2 (both strict): ${inTok(Bs) - inTok(As)}`);
   console.log('total cost:', all.reduce((s, r) => s + ((r.result && r.result.total_cost_usd) || 0), 0));
-  fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+} finally { fs.rmSync(path.dirname(dir), { recursive: true, force: true }); }
 })();
