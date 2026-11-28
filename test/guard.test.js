@@ -193,9 +193,10 @@ test('the manager list needs the manager\'s own dashboard chat; a bad pa.command
   const d = (cwd, o, extra = {}, opts = {}) => decide({ tool_name: 'Bash', tool_input: { command: 'gh issue view 1' }, cwd, ...extra }, o, { chat: true, win: false, ...opts });
   assert.strictEqual(d(gh.dir, gh, {}, { who: 'pa' }).decision, 'allow');
   const old = (r) => /does not run commands/.test(r.reason);
-  for (const r of [d('/home/ali/projects/8fix', gh), d(gh.dir, gh), d(gh.dir + '/staff/ghost', gh, {}, { who: 'pa' }), d(gh.dir, gh, { agent_type: 'general-purpose' }, { who: 'pa' }), d(gh.dir, gh, {}, { who: 'aina' })]) {
+  for (const r of [d('/home/ali/projects/8fix', gh), d(gh.dir, gh), d(gh.dir + '/staff/ghost', gh, {}, { who: 'pa' }), d(gh.dir, gh, { agent_type: 'general-purpose' }, { who: 'pa' })]) {
     assert.strictEqual(r.decision, 'deny'); assert.ok(old(r), r.reason);
   }
+  assert.match(d(gh.dir, gh, {}, { who: 'aina' }).reason, /Aina has no commands turned on/); // a staff's run is that staff (final review item 11)
   assert.strictEqual(d(gh.dir, gh, {}, { who: 'pa', chat: false }).decision, null, 'terminal: no decision');
   for (const bad of ['github', { github: true }, 7, null]) {
     const o = { ...office, pa: { name: 'Hana', commands: bad } };
@@ -373,6 +374,35 @@ test('final 5: npx is the boss\'s to list; for an Auto staff it is a wrapper', (
 test('final 10: pnpm passes the words after the script name to the script', () => {
   for (const c of ['pnpm test -g "login"', 'pnpm run e2e -g x', 'pnpm test -- -g pat']) allow(c, { agent: 'irfan' });
   for (const c of ['pnpm install -g x', 'pnpm -g install', 'pnpm add --global x', 'pnpm -C /tmp test', 'pnpm exec x']) deny(c, { agent: 'irfan' });
+});
+
+test('final 7: git clone -u and git ls-remote -u have their own reason', () => {
+  for (const [c, sub] of [['git clone -u x r', 'clone'], ['git ls-remote -u x origin', 'ls-remote']]) {
+    const r = run(c, { agent: 'wei' });
+    assert.strictEqual(r.decision, 'deny', c); assert.strictEqual(r.reason, `"-u" is not allowed with git ${sub}: it can run any program.`, c);
+  }
+});
+
+test('final 9: git reset with --hard anywhere and git checkout . are on the never-list for everyone', () => {
+  for (const who of ['shah', 'wei', 'priya']) for (const c of ['git reset HEAD~1 --hard', 'git reset -q --hard', 'git checkout .', 'git -C /home/ali/projects/8fix reset -q --hard']) {
+    const r = run(c, { agent: who });
+    assert.strictEqual(r.decision, 'deny', `${who}: ${c}`); assert.match(r.reason, /is never run from the dashboard/, `${who}: ${c}`);
+  }
+  assert.match(run('git reset -q --hard', { agent: 'wei' }).reason, /^"git reset --hard" is never run/);
+  assert.match(run('git checkout .', { agent: 'wei' }).reason, /^"git checkout \." is never run/);
+  for (const [c, shah, wei, priya] of [['git reset --soft HEAD~1', 'deny', null, null], ['git checkout ./src/a.js', 'deny', null, null], ['git checkout -b x', 'allow', null, 'allow']]) {
+    assert.strictEqual(run(c, { agent: 'shah' }).decision, shah, `shah: ${c}`);
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, wei, `wei: ${c}`);
+    assert.strictEqual(run(c, { agent: 'priya' }).decision, priya, `priya: ${c}`);
+  }
+});
+
+test('final 11: in a dashboard run the run\'s own marker says who is asking, whatever the folder', () => {
+  const as = (command, who, cwd) => decide({ tool_name: 'Bash', tool_input: { command }, cwd }, office, { chat: true, win: false, who });
+  const r = as('make test', 'shah', '/home/ali/office/staff/wei');
+  assert.strictEqual(r.decision, 'deny'); assert.match(r.reason, /not on Shah's allowed commands/);
+  assert.strictEqual(as('make test', 'wei', '/home/ali/projects/8fix').decision, null);
+  assert.strictEqual(as('git status', 'shah', '/home/ali/office/staff/wei').decision, 'allow');
 });
 
 console.log(`\n${n} guard tests passed`);

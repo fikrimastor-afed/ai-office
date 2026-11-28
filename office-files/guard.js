@@ -71,6 +71,10 @@ function flagRefusal(w) {
 }
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
+// The never-list entry a command's words match, or ''. Also git reset with --hard anywhere, and git checkout . (every file).
+const never = (w) => (ALWAYS_DENY.find((d) => starts(w.join(' '), d.trim())) || '').trim()
+  || (w[0] === 'git' && w[1] === 'reset' && w.includes('--hard') ? 'git reset --hard' : '')
+  || (w[0] === 'git' && w[1] === 'checkout' && w.slice(2).filter((x) => x !== '--').join(' ') === '.' ? 'git checkout .' : '');
 
 // Turn a path as Claude writes it (quotes, Git Bash /c/..., ~) into a real absolute path.
 function realPath(p, cwd, win) {
@@ -135,7 +139,8 @@ function decide(input, office, opts = {}) {
   const win = opts.win ?? process.platform === 'win32';
   const P = win ? path.win32 : path.posix;
   const cmd = String((input.tool_input || {}).command || '').trim();
-  const staffId = input.agent_type || ((P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff') ? P.relative(office.dir, input.cwd).split(/[\\/]/)[1] : '');
+  // Who is asking: in a dashboard run, the run's own marker (AI_OFFICE_WHO) when it names a staff; else the subagent, or a staff folder.
+  const staffId = (opts.chat && (office.staff || []).some((s) => s.id === opts.who) ? opts.who : '') || input.agent_type || ((P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff') ? P.relative(office.dir, input.cwd).split(/[\\/]/)[1] : '');
   const staff = (office.staff || []).find((s) => s.id === staffId);
   const name = staff ? staff.name : 'The PA';
   const auto = !!opts.chat && opts.who !== 'pa' && autoOn(staff); // a staff on Auto: a command not on the list goes to Claude's own check
@@ -147,10 +152,10 @@ function decide(input, office, opts = {}) {
   // one plain command, or "cd <folder> && command && command" - nothing else
   const parts = cmd ? splitCommand(cmd) : null;
   if (!parts) return no('Only plain commands can run here (no ; | $ ` > < & or similar outside quotes).');
-  for (const p of parts) for (const d of ALWAYS_DENY) if (starts(words(p).join(' '), d.trim())) {
+  for (const p of parts) { const d = never(words(p)); if (d) {
     // in the terminal the boss is there to say yes or no himself
-    return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
-  }
+    return opts.chat ? { decision: 'deny', reason: `"${d}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
+  } }
   for (const p of parts) {
     const f = flagRefusal(words(p));
     if (f) return opts.chat ? { decision: 'deny', reason: f } : { decision: null };
@@ -185,7 +190,8 @@ function decide(input, office, opts = {}) {
       const [dirArg, rest] = firstWord(gc[1]);
       if (!inside(folder(dirArg))) return elsewhere;
       p = `git ${rest}`;
-      for (const d of ALWAYS_DENY) if (starts(words(p).join(' '), d.trim())) return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
+      const d = never(words(p));
+      if (d) return opts.chat ? { decision: 'deny', reason: `"${d}" is never run from the dashboard. The boss runs it in a terminal.` } : { decision: null };
     }
     const w = words(p);
     if (w[0] === 'git' && /^-/.test(w[1] || '') && !['--version', '--help'].includes(w[1])) return no('Put the git command right after git (only -C "<folder>" may come first).');
@@ -202,7 +208,8 @@ function decide(input, office, opts = {}) {
       const wrap = WRAPPERS.find((x) => starts([first, ...args].join(' '), x));
       if (wrap) return no(`Run the command itself, not through ${wrap}.`);
       const code = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
-      if (['node', 'bun', 'deno'].includes(first) && code || (first === 'deno' && ['eval', 'repl'].includes(args[0])) || (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x)))) return no('Save the code in a file in the project and run the file.');
+      if (['node', 'bun', 'deno'].includes(first) && code || (first === 'deno' && ['eval', 'repl'].includes(args[0]))) return no('Save the code in a file in the project and run the file.');
+      if (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x))) return no(`"-u" is not allowed with git ${args[0]}: it can run any program.`);
       if (INTERPRETERS.includes(first) && inlineCode(first, args)) return no('Save the code in a file in the project and run the file.');
     }
     if (!allowed.some((a) => starts(p, a))) {
