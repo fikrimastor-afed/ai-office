@@ -4,6 +4,8 @@
 //   LEAVE <file> <text>   write it without committing
 //   STUBBORN              the session never fixes a merge conflict
 //   LONG                  takes longer
+//   SWITCH <branch>       switches the worktree to a new branch
+//   SWAP <folder>         replaces the worktree with a link to that folder and writes x.txt there
 // A prompt asking to "run git merge office/<job>" makes it merge and resolve the conflict ("resolved").
 const assert = require('assert');
 const fs = require('fs');
@@ -33,6 +35,8 @@ setTimeout(() => {
       fs.writeFileSync(path.join(wt, file), text + '\\n');
       if (how === 'WRITE') { g('add', '-A'); g('commit', '-m', 'write ' + file); }
     }
+    const sw = /^SWITCH (\\S+)$/m.exec(msg); if (sw) g('checkout', '-q', '-b', sw[1]);
+    const swap = /^SWAP (.+)$/m.exec(msg); if (swap) { fs.rmSync(wt, { recursive: true, force: true }); fs.symlinkSync(swap[1], wt, 'dir'); fs.writeFileSync(path.join(swap[1], 'x.txt'), 'x'); }
     const mm = /run git merge (office\\/[^,\\s]+),/.exec(msg);
     if (mm && !sid.startsWith('stubborn')) {
       if (g('merge', '--no-edit', mm[1]).status !== 0) {
@@ -60,7 +64,7 @@ const O = require('../lib/office');
 const R = require('../lib/repo');
 const { Tasks } = require('../lib/tasks');
 const { Jobs } = require('../lib/jobs');
-const { Gates, NOT_READY, NO_REPO } = require('../lib/gates');
+const { Gates, NOT_READY, NOT_READY_TASK, NO_REPO, ROOT_BAD, CODE_BAD } = require('../lib/gates');
 const { access, chatEnv, resolveClaude } = require('../lib/chat');
 
 const git = (cwd, ...a) => { const r = spawnSync('git', a, { cwd, encoding: 'utf8' }); assert.strictEqual(r.status, 0, `git ${a.join(' ')}: ${r.stderr}`); return r.stdout.trim(); };
@@ -310,6 +314,166 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(officeBranches(rb), '');
     assert.strictEqual(snap(rb), before);
     assert.ok(!fs.existsSync(path.join(biz.dir, '.office', 'gates.json')));
+  });
+
+  // ---- fix round 1: links, stuck checks, follow-ups taking turns, name clashes
+  const canLink = (() => { const t = path.join(tmp, 'linktest'); try { fs.symlinkSync(tmp, t, 'dir'); fs.unlinkSync(t); return true; } catch (e) { if (process.platform === 'win32' && e.code === 'EPERM') return false; throw e; } })();
+  const soft2 = office('soft2', 'software');
+  const [t0, t1] = soft2.staff;
+  const nameOf = (id) => JSON.parse(fs.readFileSync(path.join(soft2.dir, 'office.json'), 'utf8')).staff.find((x) => x.id === id).name;
+  const r2 = mkRepo('repo2');
+  const p2 = project(soft2, 'Shop two', r2);
+  const fixOf = (id) => soft2.tasks.list().find((t) => t.fixes === id);
+
+  await test('a worktree swapped for a link to another repo: nothing is committed there and the task fails', async () => {
+    if (!canLink) return console.log('  (skip: links need privileges here)');
+    const other = mkRepo('other'), head = git(other, 'rev-parse', 'HEAD');
+    soft2.put('s1t', `staff: ${t0}\nproject: ${p2}\njob: q0\nkind: code`, `Swap\nLEAVE s.txt s\nSWAP ${other}`);
+    soft2.job('q0', p2); soft2.jobs.setStatus('q0', 'approved'); soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('s1t')));
+    assert.strictEqual(soft2.status('s1t'), 'failed');
+    assert.strictEqual(git(other, 'rev-parse', 'HEAD'), head, 'the other repo got no commit');
+    assert.strictEqual(git(other, 'status', '--porcelain'), '?? x.txt');
+    fs.unlinkSync(path.join(soft2.dir, 'worktrees', 's1t')); R.prune(r2);
+  });
+
+  await test('a conflict follow-up that is cancelled before it runs fails the waiting task on the next scan', async () => {
+    soft2.put('g1', `staff: ${t0}\nproject: ${p2}\njob: q1\nkind: code`, 'G one\nWRITE a.txt g1');
+    soft2.put('g2', `staff: ${t1}\nproject: ${p2}\njob: q1\nkind: code`, 'G two LONG\nWRITE a.txt g2');
+    await sleep(20); soft2.put('g3', `staff: ${t1}`, 'Busy LONG');
+    soft2.job('q1', p2); soft2.jobs.setStatus('q1', 'approved'); soft2.tasks.scan();
+    await until(() => fixOf('g2') && soft2.status('g3') === 'working');
+    const c = soft2.tasks.board().checking.find((x) => x.id === 'g2');
+    assert.strictEqual(c.reason, `Waiting for ${nameOf(t1)} to fix the merge`);
+    assert.ok(soft2.tasks.stop(fixOf('g2').id).ok);
+    soft2.tasks.scan();
+    await until(() => soft2.status('g2') === 'failed');
+    assert.ok(soft2.tasks.read('g2').result.endsWith('The follow-up to fix the merge did not finish.'));
+    await until(() => soft2.status('g3') === 'done');
+  });
+
+  await test('Stop on a checking task: stopped, its worktree removed, its follow-up cancelled, the branch kept', async () => {
+    soft2.put('h1', `staff: ${t0}\nproject: ${p2}\njob: q2\nkind: code`, 'H one\nWRITE b.txt h1');
+    soft2.put('h2', `staff: ${t1}\nproject: ${p2}\njob: q2\nkind: code`, 'H two LONG\nWRITE b.txt h2');
+    await sleep(20); soft2.put('h3', `staff: ${t1}`, 'Busy again LONG');
+    soft2.job('q2', p2); soft2.jobs.setStatus('q2', 'approved'); soft2.tasks.scan();
+    await until(() => fixOf('h2') && soft2.status('h3') === 'working');
+    assert.ok(soft2.tasks.stop('h2').ok);
+    const t = soft2.tasks.read('h2');
+    assert.strictEqual(t.status, 'stopped');
+    assert.ok(t.result.endsWith('Stopped by the boss while the office was finishing it. Branch office/h2 is in the project folder.'), t.result);
+    assert.ok(!fs.existsSync(path.join(soft2.dir, 'worktrees', 'h2')));
+    assert.ok(R.branchExists(r2, 'office/h2'));
+    assert.strictEqual(fixOf('h2').status, 'stopped');
+    await until(() => soft2.status('h3') === 'done');
+  });
+
+  await test('two follow-ups of one task take turns in its worktree; both reach the job branch', async () => {
+    soft2.put('m1', `staff: ${t0}\nproject: ${p2}\njob: q3\nkind: code`, 'M one\nWRITE m1.txt m');
+    soft2.job('q3', p2); soft2.jobs.setStatus('q3', 'approved'); soft2.tasks.scan();
+    await until(() => soft2.status('m1') === 'done');
+    soft2.put('f1', `staff: ${t0}\ncontinues: m1\nproject: ${p2}\njob: q3`, 'F one\nWRITE f1.txt one');
+    await sleep(20); soft2.put('f2', `staff: ${t0}\ncontinues: m1\nproject: ${p2}\njob: q3`, 'F two\nWRITE f2.txt two');
+    soft2.tasks.scan();
+    await until(() => soft2.status('f1') !== 'new');
+    const w = soft2.tasks.board().waiting.find((x) => x.id === 'f2');
+    assert.strictEqual(w.reason, 'Waiting for F one');
+    await until(() => ['done', 'failed'].includes(soft2.status('f2')));
+    assert.strictEqual(soft2.status('f1'), 'done'); assert.strictEqual(soft2.status('f2'), 'done');
+    assert.strictEqual(show(r2, 'office/q3:f1.txt'), 'one'); assert.strictEqual(show(r2, 'office/q3:f2.txt'), 'two');
+    assert.ok(callOf('WRITE f2.txt').at > Date.parse(soft2.tasks.read('f1').finished) - 5, 'f2 ran after f1 was finished');
+    assert.ok(!fs.existsSync(path.join(soft2.dir, 'worktrees', 'm1')));
+  });
+
+  await test('a staff who switches branches in the worktree: nothing is merged, the worktree stays, the task fails plainly', async () => {
+    const wt = path.join(soft2.dir, 'worktrees', 'w1');
+    soft2.put('w1', `staff: ${t0}\nproject: ${p2}\njob: q4\nkind: code`, 'Switch\nLEAVE s.txt s\nSWITCH feature');
+    soft2.job('q4', p2); soft2.jobs.setStatus('q4', 'approved'); soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('w1')));
+    assert.strictEqual(soft2.status('w1'), 'failed');
+    assert.ok(soft2.tasks.read('w1').result.endsWith(`The work is on branch feature, not office/w1. Nothing was merged. The worktree is still at ${wt}.`), soft2.tasks.read('w1').result);
+    assert.ok(fs.existsSync(path.join(wt, 's.txt')));
+    assert.strictEqual(show(r2, 'office/q4:s.txt'), null);
+    assert.strictEqual(git(r2, 'rev-parse', 'feature'), git(r2, 'rev-parse', 'office/q4'), 'nothing committed onto feature');
+  });
+
+  await test("a project's code folder that is a link, or holds a planted .git file: held, nothing done outside", async () => {
+    const pa = project(soft2, 'Gitfile app'); const code = path.join(soft2.dir, 'projects', pa, 'code');
+    fs.mkdirSync(code); fs.writeFileSync(path.join(code, '.git'), `gitdir: ${path.join(r2, '.git')}\n`);
+    soft2.put('i1', `staff: ${t0}\nproject: ${pa}\nkind: code`, 'Planted\nWRITE i.txt i');
+    soft2.tasks.scan(); await sleep(300);
+    assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === 'i1').reason, CODE_BAD);
+    soft2.tasks.stop('i1');
+    if (!canLink) return console.log('  (skip: links need privileges here)');
+    const out = path.join(tmp, 'outside'); fs.mkdirSync(out);
+    const pl = project(soft2, 'Linked out'); fs.symlinkSync(out, path.join(soft2.dir, 'projects', pl, 'code'), 'dir');
+    soft2.put('i2', `staff: ${t0}\nproject: ${pl}\nkind: code`, 'Out\nWRITE i.txt i');
+    soft2.tasks.scan(); await sleep(300);
+    assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === 'i2').reason, CODE_BAD);
+    assert.deepStrictEqual(fs.readdirSync(out), [], 'no git init outside');
+    soft2.tasks.stop('i2');
+  });
+
+  await test('a task and a job with the same name: the task fails, or the job waits, with a plain reason', async () => {
+    soft2.job('q5', p2);
+    soft2.put('q5', `staff: ${t0}\nproject: ${p2}\nkind: code`, 'Clash\nWRITE c.txt c');
+    soft2.tasks.scan();
+    await until(() => soft2.status('q5') === 'failed');
+    assert.strictEqual(soft2.tasks.read('q5').result, 'A task and a job cannot have the same name ("q5").');
+    soft2.job('m1', p2); soft2.jobs.setStatus('m1', 'approved'); // m1 is a task with a recorded branch
+    soft2.put('y1', `staff: ${t0}\nproject: ${p2}\njob: m1\nkind: code`, 'Clash two\nWRITE c.txt c');
+    soft2.tasks.scan(); await sleep(300);
+    assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === 'y1').reason, 'A task and a job cannot have the same name ("m1").');
+    assert.ok(!R.branchExists(r2, 'office/m1') || git(r2, 'rev-parse', 'office/m1') !== git(r2, 'rev-parse', 'main'), 'no job branch made over the task branch');
+    soft2.tasks.stop('y1');
+    // the server leaves such a job planned (no plan card) and says why once
+    const { createServer } = require('../lib/server');
+    process.env.AI_OFFICE_NO_DOCTOOLS = '1';
+    const s3 = office('soft3', 'software');
+    fs.mkdirSync(path.join(s3.dir, '.office'), { recursive: true });
+    fs.writeFileSync(path.join(s3.dir, '.office', 'gates.json'), JSON.stringify({ zz: { repo: r2, wt: path.join(s3.dir, 'worktrees', 'zz'), branch: 'office/zz', base: 'main', into: '' } }));
+    fs.writeFileSync(path.join(s3.dir, 'tasks', 'zz.md'), `---\nstaff: ${s3.staff[0]}\nstatus: done\n---\nOld\n`);
+    s3.job('zz', 'x'); s3.put('zz-1', `staff: ${s3.staff[0]}\njob: zz`, 'Under zz');
+    const srv = createServer(s3.dir); await srv.listen(0);
+    try {
+      await sleep(400);
+      assert.ok(!O.listApprovals(s3.dir).some((a) => a.status === 'pending'), 'no plan card');
+      const chat = fs.readFileSync(path.join(s3.dir, '.office', 'chats', 'pa.jsonl'), 'utf8');
+      assert.strictEqual(chat.split('A task and a job cannot have the same name (\\"zz\\").').length - 1, 1);
+    } finally { await srv.close(); }
+  });
+
+  await test('a small task on a dirty checkout waits with its own wording', async () => {
+    const d2 = mkRepo('dirty2'); fs.writeFileSync(path.join(d2, 'a.txt'), 'edited\n');
+    const p = project(soft2, 'Dirty two', d2);
+    soft2.put('k2', `staff: ${t0}\nproject: ${p}\nkind: code`, 'Small dirty\nWRITE k.txt k');
+    soft2.tasks.scan(); await sleep(300);
+    assert.strictEqual(NOT_READY_TASK, 'The project folder has changes that are not committed (or no branch checked out). Commit or stash them and the task will start.');
+    assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === 'k2').reason, NOT_READY_TASK);
+    soft2.tasks.stop('k2');
+  });
+
+  await test('restart: a worktrees folder that became a link is never followed; finished records are dropped', async () => {
+    const again = engine(soft2.dir);
+    again.gates.recover(); await sleep(200);
+    const reg = JSON.parse(fs.readFileSync(path.join(soft2.dir, '.office', 'gates.json'), 'utf8'));
+    for (const id of ['g1', 'm1', 'f1', 'f2', 'h2']) assert.ok(!reg[id], `${id} dropped`);
+    assert.ok(reg.w1, 'a failed task whose worktree is still there is kept');
+    if (!canLink) return console.log('  (skip: links need privileges here)');
+    const root = path.join(soft2.dir, 'worktrees'), bak = path.join(soft2.dir, 'wt-bak');
+    fs.renameSync(root, bak);
+    const elsewhere = path.join(tmp, 'elsewhere'); fs.mkdirSync(path.join(elsewhere, 'v1'), { recursive: true }); fs.writeFileSync(path.join(elsewhere, 'v1', 'keep.txt'), 'k');
+    fs.symlinkSync(elsewhere, root, 'dir');
+    reg.v1 = { repo: r2, wt: path.join(root, 'v1'), branch: 'office/v1', base: 'main', into: '' };
+    fs.writeFileSync(path.join(soft2.dir, '.office', 'gates.json'), JSON.stringify(reg));
+    const third = engine(soft2.dir);
+    third.gates.recover(); await sleep(200);
+    assert.ok(fs.existsSync(path.join(elsewhere, 'v1', 'keep.txt')), 'nothing outside the office is deleted');
+    third.put('v2', `staff: ${t0}\nproject: ${p2}\nkind: code`, 'After swap\nWRITE v.txt v');
+    third.tasks.scan(); await sleep(300);
+    assert.strictEqual(third.tasks.board().waiting.find((x) => x.id === 'v2').reason, ROOT_BAD(soft2.dir));
+    third.tasks.stop('v2');
+    fs.unlinkSync(root); fs.renameSync(bak, root);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

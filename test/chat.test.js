@@ -248,7 +248,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     const ext = path.join(tmp, 'git linked'); fs.mkdirSync(ext);
     const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
     cfg.linked = [{ path: ext, label: 'Repo' }]; fs.writeFileSync(f, JSON.stringify(cfg));
-    const r = T.rulePath(path.resolve(dir)), want = [`Edit(${T.rulePath(ext)}/.git/**)`, `Edit(${r}/projects/*/code/.git/**)`, `Edit(${r}/worktrees/*/.git)`];
+    const r = T.rulePath(path.resolve(dir)), want = [`Edit(${T.rulePath(ext)}/.git/**)`, `Edit(${r}/projects/*/code/.git/**)`, `Edit(${r}/projects/*/code/.git)`, `Edit(${r}/worktrees/*/.git)`];
     for (const who of ['siti', 'pa']) for (const w of want) assert.ok(access(dir, who).denied.includes(w), `${who}: ${w}`);
     chats.send('siti', 'hi');
     await idle('siti');

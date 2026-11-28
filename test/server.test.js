@@ -507,8 +507,12 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         // the plan cannot be made impossible to approve: delete it, or edit its status, and a fresh one appears
         const cur = (await plans()).find((z) => z.ref === 'p3');
         fs.unlinkSync(w('approvals', `${cur.id}.md`));
-        await until(async () => { const n = (await plans()).find((z) => z.ref === 'p3'); return n && n.id !== cur.id; });
+        const remade = () => { const id = reg().p3.planApproval; try { return /^status: pending$/m.test(fs.readFileSync(w('approvals', `${id}.md`), 'utf8')); } catch { return false; } };
+        await until(remade); // the recorded card is there again and pending
         const cur2 = (await plans()).find((z) => z.ref === 'p3'); assert.strictEqual(reg().p3.planApproval, cur2.id);
+        assert.notStrictEqual(cur2.id, cur.id, 'a fresh card never reuses the id of the one it replaces');
+        { const O = require('../lib/office'), x1 = O.addApproval(dir5, { from: 'Office', action: 'Same card' }, { office: true }); fs.unlinkSync(w('approvals', `${x1.id}.md`));
+          const x2 = O.addApproval(dir5, { from: 'Office', action: 'Same card' }, { office: true, avoid: x1.id }); assert.notStrictEqual(x2.id, x1.id); fs.unlinkSync(w('approvals', `${x2.id}.md`)); }
         fs.writeFileSync(w('approvals', `${cur2.id}.md`), fs.readFileSync(w('approvals', `${cur2.id}.md`), 'utf8').replace('status: pending', 'status: rejected'));
         await until(async () => { const n = (await plans()).find((z) => z.ref === 'p3'); return n && n.id !== cur2.id && n.status === 'pending'; });
         const cur3 = (await plans()).find((z) => z.ref === 'p3');
