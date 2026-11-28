@@ -43,7 +43,7 @@ process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
 
 const G = require('../lib/generate');
 const D = require('../lib/defaults');
-const { Chats } = require('../lib/chat');
+const { Chats, access } = require('../lib/chat');
 const dir = path.join(tmp, 'office');
 G.writeOffice(dir, G.buildConfig({ company: 'Kedai Ali', pa: 'Hana', staff: D.STAFF.slice(0, 2).map(({ name, role, job }) => ({ name, role, job })) }));
 
@@ -205,6 +205,33 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     chats.send('pa', 'again'); await idle('pa');
     assert.ok(!tools()[0].includes('Bash'), 'only github counts');
     delete cfg.pa.commands; fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
+  await test('an Auto staff chat run starts in auto mode with the settings; everyone else is unchanged', async () => {
+    const f = path.join(dir, 'office.json');
+    const cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const setAuto = (id) => fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.map((s) => (s.id === id ? { ...s, commandMode: 'auto' } : s)) }));
+    const run = async (who) => { chats.send(who, 'hello ' + who); await idle(who); return calls().pop(); };
+    const val = (c, k) => c.args[c.args.indexOf(k) + 1];
+    fs.writeFileSync(f, JSON.stringify(cfg));
+    const before = await run(cfg.staff[0].id);
+    setAuto(cfg.staff[1].id);
+    const auto = await run(cfg.staff[1].id);
+    assert.strictEqual(val(auto, '--permission-mode'), 'auto');
+    assert.ok(val(auto, '--tools').split(',').includes('Bash'));
+    assert.ok(!val(auto, '--allowedTools').split(',').includes('Bash'), 'Bash stays with the guard and the check');
+    const st = JSON.parse(val(auto, '--settings')); assert.ok(st.autoMode);
+    assert.ok(st.autoMode.environment[1].includes(JSON.stringify(path.resolve(dir))));
+    assert.match(val(auto, '--append-system-prompt'), /Claude Code checks each one/);
+    const other = await run(cfg.staff[0].id);
+    assert.deepStrictEqual(other.args, before.args, 'a non-Auto staff run is the same with or without an Auto colleague');
+    assert.strictEqual(val(other, '--permission-mode'), 'default'); assert.ok(!other.args.includes('--settings'));
+    const pa = await run('pa');
+    assert.strictEqual(val(pa, '--permission-mode'), 'default'); assert.ok(!pa.args.includes('--settings'));
+    assert.match(access(dir, 'pa').note, /any command the work needs, checked by Claude Code/);
+    assert.strictEqual(access(dir, 'pa').auto, false);
+    console.log(JSON.stringify(auto.args)); console.log(JSON.stringify(st));
+    fs.writeFileSync(f, JSON.stringify(cfg));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

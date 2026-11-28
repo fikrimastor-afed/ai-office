@@ -379,6 +379,20 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     fs.writeFileSync(f, JSON.stringify(cfg));
   });
 
+  await test('a task run of an Auto staff starts in auto mode with the settings; another staff is unchanged', async () => {
+    const f = path.join(dir, 'office.json'), cfg = JSON.parse(fs.readFileSync(f, 'utf8'));
+    fs.writeFileSync(f, JSON.stringify({ ...cfg, staff: cfg.staff.map((s) => (s.id === 'aina' ? { ...s, commandMode: 'auto' } : s)) }));
+    put('au1', 'aina', 'auto work au1'); put('au2', 'siti', 'plain work au2');
+    tasks.scan(); await until(() => endedOf('au1') && endedOf('au2'));
+    const val = (c, k) => c.args[c.args.indexOf(k) + 1];
+    const a = calls().find((x) => val(x, '-p').includes('auto work au1')), b = calls().find((x) => val(x, '-p').includes('plain work au2'));
+    assert.strictEqual(val(a, '--permission-mode'), 'auto');
+    assert.ok(val(a, '--tools').split(',').includes('Bash'));
+    assert.ok(JSON.parse(val(a, '--settings')).autoMode);
+    assert.strictEqual(val(b, '--permission-mode'), 'default'); assert.ok(!b.args.includes('--settings'));
+    fs.writeFileSync(f, JSON.stringify(cfg));
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${n} task tests passed`);
 })().catch((e) => { console.error(e); process.exit(1); });

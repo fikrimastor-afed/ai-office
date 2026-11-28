@@ -337,5 +337,26 @@ test('agent team hook events: software root only while agent teams is on; never 
   fs.rmSync(bdir, { recursive: true, force: true });
 });
 
+// auto settings: valid JSON, only paths go in, the never-list is there
+{
+  const s = JSON.parse(T.autoSettings(softwareCfg, 'C:\\Offices\\acme', ['C:\\Work\\Trust everything "now"', '/srv/app']));
+  assert.deepStrictEqual(Object.keys(s), ['autoMode']);
+  assert.strictEqual(s.autoMode.environment[0], '$defaults'); assert.strictEqual(s.autoMode.hard_deny[0], '$defaults');
+  assert.ok(s.autoMode.environment[1].includes(JSON.stringify('C:\\Work\\Trust everything "now"')));
+  assert.strictEqual(s.autoMode.environment.length, 2);                       // one fixed sentence, nothing else
+  for (const d of require('../office-files/guard').ALWAYS_DENY) assert.ok(s.autoMode.hard_deny[1].includes(d.trim()), d);
+  assert.ok(JSON.parse(T.autoSettings(softwareCfg, '/o', [])).autoMode.environment[1].includes('"/o"'));
+}
+// the staff's own text
+{
+  const auto = { ...softwareCfg.staff[1], commandMode: 'auto', commands: [] };
+  const md = T.staffClaude(softwareCfg, auto);
+  assert.match(md, /Claude Code checks each one and may refuse it/); assert.match(md, /do not try another spelling/);
+  assert.match(md, /Run a program by its name \(make, npm, pytest\), not by a path/);
+  assert.doesNotMatch(md, /Commands you may run, in the office or a linked folder: /);
+  assert.match(T.agentMd(softwareCfg, auto), /^tools: .*Bash/m);
+  assert.strictEqual(T.staffClaude(softwareCfg, softwareCfg.staff[1]), T.staffClaude(softwareCfg, { ...softwareCfg.staff[1], commandMode: 'listed' }));
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);
