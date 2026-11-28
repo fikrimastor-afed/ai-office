@@ -8,6 +8,7 @@ const office = {
   staff: [
     { id: 'shah', name: 'Shah', commands: ['git', 'laravel'], customCommands: ['php vendor/bin/pint'] },
     { id: 'irfan', name: 'Irfan', commands: ['pnpm', 'yarn', 'python', 'go', 'rust', 'github'] },
+    { id: 'wide', name: 'Wide', customCommands: ['cargo', 'pnpm', 'yarn', 'go', 'gh'] },
     { id: 'siti', name: 'Siti' },
     { id: 'aina', name: 'Aina', docs: false },
   ],
@@ -145,6 +146,23 @@ test('GitHub read only: look things up, never change them', () => {
   const o = { agent: 'irfan' };
   for (const c of ['gh issue view 12', 'gh issue view 12 --repo acme/shop --comments', 'gh issue list --label bug', 'gh pr view 5', 'gh pr list', 'gh pr diff 5', 'gh project item-list 3 --owner acme']) allow(c, o);
   for (const c of ['gh pr merge 5', 'gh issue comment 12 -b hi', 'gh issue close 12', 'gh issue create -t x', 'gh pr create', 'gh api repos/acme/shop', 'gh auth token', 'gh secret list', 'gh repo delete x', 'gh issue view 12 && rm -rf x', 'gh issue view 12 | cat']) deny(c, o);
+});
+
+test('engineer always-refused commands stay refused even when a custom command is broad', () => {
+  const o = { agent: 'wide' };
+  allow('cargo build', o); allow('go version', o);
+  for (const c of ['pnpm publish', 'pnpm dlx x', 'pnpm exec x', 'yarn publish', 'yarn npm publish', 'yarn dlx x', 'yarn exec x', 'cargo publish', 'cargo install x', 'cargo run',
+    'go run .', 'go install x@latest', 'gh auth token', 'gh api repos/a/b', 'gh secret list']) deny(c, o);
+});
+
+test('flags that run a program or delete a folder are refused, whatever allowed the command', () => {
+  const o = { agent: 'irfan' };
+  for (const c of ['go test -exec "sh -c id" ./...', 'go build -toolexec ./x', 'go vet -vettool=./x', 'cargo build --config build.rustc-wrapper="sh"', 'cargo test --config x=1',
+    'pytest --basetemp=/somewhere', 'python -m pytest --basetemp /somewhere', 'cd /home/ali/projects/8fix && go test -exec x ./...']) deny(c, o);
+  deny('go test -exec x ./...', { agent: 'wide' });
+  assert.strictEqual(run('go test -exec x', { chat: false }).decision, null, 'terminal: no decision');
+  assert.ok(/"-exec" is not allowed with go: it can run or delete anything\./.test(run('go test -exec x', { agent: 'irfan' }).reason));
+  for (const c of ['go test ./... -run TestExec', 'cargo test config_loads', 'pytest tests/test_basetemp.py']) allow(c, o);
 });
 
 console.log(`\n${n} guard tests passed`);

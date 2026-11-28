@@ -35,6 +35,8 @@ const ALWAYS_DENY = ['git push', 'git reset --hard', 'git clean', 'git rebase', 
   'npm publish', 'composer remove',
   'pnpm publish', 'pnpm dlx', 'pnpm exec', 'yarn publish', 'yarn npm publish', 'yarn dlx', 'yarn exec', 'cargo publish', 'cargo install', 'cargo run',
   'go run', 'go install', 'gh auth', 'gh api', 'gh secret', 'rm ', 'sudo', 'curl', 'wget', 'ssh', 'scp'];
+// Flags that make an allowed command run any program or delete a folder anywhere: refused whatever allowed the command.
+const DENY_FLAGS = { go: ['-exec', '-toolexec', '-vettool'], cargo: ['--config'], pytest: ['--basetemp'], python: ['--basetemp'], python3: ['--basetemp'] };
 
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
 
@@ -84,6 +86,11 @@ function decide(input, office, opts = {}) {
   for (const p of parts) for (const d of ALWAYS_DENY) if (starts(p, d.trim())) {
     // in the terminal the boss is there to say yes or no himself
     return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
+  }
+  for (const p of parts) {
+    const w = p.split(/\s+/).map((x) => x.replace(/^["']|["']$/g, ''));
+    const f = (DENY_FLAGS[w[0]] || []).find((d) => w.some((x, k) => k && (x === d || x.startsWith(`${d}=`))));
+    if (f) return opts.chat ? { decision: 'deny', reason: `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
   }
   if (!staff) return no(`${name} does not run commands. Hand it to a staff who has commands turned on (Staff page).`);
   const allowed = [...cmdsOf(staff).flatMap((k) => (PRESETS[k] ? PRESETS[k].allow : [])), ...(staff.customCommands || [])];
