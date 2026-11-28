@@ -35,9 +35,9 @@ Engineer) and Sofia (Designer) are optional. The type cannot be changed later.
 
 - The code lives in a linked project folder, not inside the office. Engineers start with Git and npm commands ticked, the Reviewer with Git.
 - The tech lead can look up a GitHub issue, pull request or project item by number, read only. It is a tick box on the manager's card (on in a software office), works in the dashboard chat and needs `gh` logged in.
-- Staff cannot push or publish. You do that yourself, in your own terminal.
+- From the dashboard, staff cannot push or publish. You do that yourself, in your own terminal.
 - In a terminal, Claude Code agent teams are on by default (experimental; switch in Settings > General). Your own Claude skills work as usual there.
-- Coming next: reviews and tests enforced by the office, one branch per task, budgets, pushing after your approval. For now the tech lead is told to add a QA task and a Reviewer task, but nothing forces it.
+- Coming next: reviews and tests enforced by the office, one branch per task, budgets, pushing after your approval. For now the tech lead is told to add a QA task and a Reviewer task, but nothing forces it, and the Reviewer is only told not to edit code; nothing stops it yet.
 
 ## What you need
 
@@ -98,7 +98,7 @@ Claude usage at API prices. On a Claude subscription you are not billed this; it
 |---|---|
 | Files | Only the office folder and folders you link (Settings, or per project). Everything else is refused. |
 | Office rules | Staff cannot change their own rules, the office settings or the approvals log. |
-| Commands | Only what you tick per staff (git, npm, pnpm, Yarn, Python, Go, Rust, composer, Laravel, Office documents; GitHub read only for the manager), checked by a small guard script before every command, and only in the office or a linked folder. Never from the dashboard: `git push`, `reset --hard`, deleting with `rm`, `curl`, `sudo` and similar. |
+| Commands | Only what you tick per staff (git, npm, pnpm, Yarn, Python, Go, Rust, composer, Laravel, Office documents, GitHub read only; GitHub also for the manager, on the manager's card), checked by a small guard script before every command, and only in the office or a linked folder. Never from the dashboard: `git push`, `reset --hard`, deleting with `rm`, `curl`, `sudo` and similar. |
 | Office documents | Staff may run `node` only on a script saved inside the office. |
 | Actions that leave the office | Ask first by default (Needs your OK). |
 | Your data | Stays in your office folder. The dashboard listens on your own computer only (localhost). AI Office stores no logins or passwords. |
