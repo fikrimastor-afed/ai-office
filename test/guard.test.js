@@ -275,8 +275,9 @@ test('fix round 1: the never-list and folder rule read commands as the shell doe
     'git -C/etc status', 'git --git-dir=/etc/.git status', 'git --work-tree=/etc status', 'git -c x=y -C /etc status', 'cd && ls', 'cd - && ls', 'pushd /etc && ls', 'builtin cd /etc && ls', 'ls && "cd" /etc && ls',
     "cd ''/etc && ls", 'cd \\/etc && ls', "git -C ''/etc status"];
   for (const who of ['shah', 'wei', 'priya']) for (const c of bad) assert.strictEqual(run(c, { agent: who }).decision, 'deny', `${who}: ${c}`);
-  for (const c of ['./build.sh', '/usr/bin/make', 'env FOO=1 make', 'xargs rm', 'python -c "import os"', 'node -e "1"', 'timeout 5 make', 'git --no-pager log', 'git -C /home/ali/projects/8fix -C /etc status', 'ls ; x'])
+  for (const c of ['/usr/bin/make', 'env FOO=1 make', 'xargs rm', 'python -c "import os"', 'node -e "1"', 'timeout 5 make', 'git --no-pager log', 'git -C /home/ali/projects/8fix -C /etc status', 'ls ; x'])
     assert.strictEqual(run(c, { agent: 'wei' }).decision, 'deny', c);
+  assert.strictEqual(run('./build.sh', { agent: 'wei' }).decision, null); // a file in the project: allowed by path since the final review (item 8)
   for (const c of ['make test', 'ls -la', 'python manage.py test', 'cd /home/ali/projects/8fix && make test', 'git -C /home/ali/projects/8fix describe --always', 'docker compose up -d', 'pytest -q'])
     assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
   assert.strictEqual(run('node scripts/build.js', { agent: 'wei' }).decision, 'allow');   // node on a script in the office is on the always-on Office documents list
@@ -313,6 +314,36 @@ test('fix round 3: shortened git flags that run programs; inline code through no
     assert.strictEqual(run(c, { agent: 'wei' }).decision, 'deny', c);
   for (const c of ['node --import ./setup.mjs app.js', 'deno run main.ts', 'deno test']) assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
   console.log(`   shah git branch -u origin/main: ${run('git branch -u origin/main', { agent: 'shah' }).decision}`);
+});
+
+test('final 1: an Auto staff runs one plain command that starts with the program name', () => {
+  for (const who of ['wei', 'priya']) for (const c of ['GIT_TERMINAL_PROMPT=0 git push origin main', 'CI=1 git push', 'A=1 rm -rf x', '(git push)', '! git push']) {
+    const r = run(c, { agent: who });
+    assert.strictEqual(r.decision, 'deny', `${who}: ${c}`);
+    assert.strictEqual(r.reason, 'Run one plain command: start with the program\'s name.', `${who}: ${c}`);
+  }
+  for (const c of ['make test', 'ls -la', 'pytest -q', 'g++ --version']) assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
+});
+
+test('final 2: inline code is read from the interpreter\'s own flags only, not the script\'s', () => {
+  for (const c of ['php artisan make:controller X -r', 'php artisan make:model X -c', 'php artisan test -p', 'python -m pip install -e .', 'python -m pytest -rA', 'python script.py -c cfg.yml', 'ruby -Itest test/x.rb'])
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
+  const lara = { ...office, staff: [...office.staff, { id: 'lara', name: 'Lara', commands: ['laravel', 'python'], commandMode: 'auto' }] };
+  for (const c of ['php artisan make:controller X -r', 'php artisan make:model X -c', 'php artisan test -p', 'python -m pytest -rA'])
+    assert.strictEqual(decide({ tool_name: 'Bash', tool_input: { command: c }, agent_type: 'lara', cwd: lara.dir }, lara, { chat: true, win: false }).decision, 'allow', c);
+  for (const c of ['python -c "1"', 'python -Sc "1"', 'node -e "1"', 'node --eval=1', 'perl -ne 1', 'php -r "1"']) {
+    const r = run(c, { agent: 'wei' });
+    assert.strictEqual(r.decision, 'deny', c); assert.strictEqual(r.reason, 'Save the code in a file in the project and run the file.', c);
+  }
+});
+
+test('final 8: an Auto staff may run a program by a path inside the project, never by a full path', () => {
+  for (const c of ['./vendor/bin/phpunit', '.venv/bin/pytest -q', './gradlew build', 'vendor/bin/pint', 'cd /home/ali/projects/8fix && ./node_modules/.bin/tsc --noEmit'])
+    assert.strictEqual(run(c, { agent: 'wei' }).decision, null, c);
+  for (const c of ['/usr/bin/make', '../x.sh', './a/../../x.sh', '~/x.sh', './git push', 'bin/rm -rf x', './bash -c x']) assert.strictEqual(run(c, { agent: 'wei' }).decision, 'deny', c);
+  const winR = decide({ tool_name: 'Bash', tool_input: { command: 'C:\\Git\\cmd\\git.exe status' }, agent_type: 'wei', cwd: office.dir }, office, { chat: true, win: true });
+  assert.strictEqual(winR.decision, 'deny');
+  assert.strictEqual(run('/usr/bin/make', { agent: 'wei' }).reason, 'Run the command by its name, or by a path inside the project (like ./vendor/bin/phpunit), not by a full path.');
 });
 
 console.log(`\n${n} guard tests passed`);

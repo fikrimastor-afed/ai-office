@@ -59,6 +59,14 @@ const flagHit = (first, x, d) => {
   return dn.length === 1 ? new RegExp(`^[${SHORT[first]}]+$`).test(n) && n.includes(dn) : n.length >= 3 && dn.startsWith(n);
 };
 
+// The first refused flag in a command's words, with the reason: '' when there is none.
+function flagRefusal(w) {
+  const ws = w[0] === 'npm' && w.includes('--') ? w.slice(0, w.indexOf('--')) : w; // npm: words after a bare -- belong to the script
+  const f = (DENY_FLAGS[w[0]] || []).find((d) => ws.some((x, k) => k && /^-/.test(x) && flagHit(w[0], x, d)));
+  if (!f) return '';
+  return GLOBAL_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: it installs outside the project.` : MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.`;
+}
+
 const starts = (cmd, prefix) => cmd === prefix.trim() || cmd.startsWith(prefix.endsWith(' ') ? prefix : `${prefix} `) || cmd.startsWith(`${prefix}\t`);
 
 // Turn a path as Claude writes it (quotes, Git Bash /c/..., ~) into a real absolute path.
@@ -95,6 +103,25 @@ const words = (p) => { const w = p.split(/\s+/).map((x) => x.replace(/["'\\]/g, 
 // Wrappers and shells: with these a command can hide another one (an Auto staff has no list to catch them).
 const WRAPPERS = ['env', 'command', 'builtin', 'exec', 'eval', 'source', '.', 'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'cmd', 'powershell', 'pwsh', 'xargs', 'nohup', 'time', 'timeout', 'nice', 'watch', 'pushd', 'popd', 'su', 'doas'];
 const INTERPRETERS = ['node', 'python', 'python2', 'python3', 'ruby', 'perl', 'php', 'deno', 'bun', 'lua'];
+const PLAIN = /^[A-Za-z0-9_.+-]+$/; // a program name, or one folder name in a path
+const NEVER_PROGRAMS = [...new Set(ALWAYS_DENY.map((d) => d.trim().split(' ')[0]))]; // git, rm, curl, ...: run by name only
+// Letters that take a value in an interpreter's flags: joined (ruby -Itest) or as the next word (python -W ignore).
+const VALUED = { python: 'WX', python2: 'WX', python3: 'WX', ruby: 'ICFK', perl: 'IMmx', php: 'dfztS', node: 'C', lua: 'l' };
+// Code on the command line: a code flag among the interpreter's own flags, the words before the script or
+// subcommand (python -m runs a module: the rest is the module's). A long flag without = may take the next word.
+function inlineCode(first, args) {
+  for (let k = 0; k < args.length; k++) {
+    const x = args[k];
+    if (!/^-./.test(x) || (/^python/.test(first) && /^-m/.test(x))) return false;
+    if (/^--(eval|print|command)(=|$)/.test(x)) return true;
+    if (/^--./.test(x)) { if (!x.includes('=')) k++; continue; }
+    for (let j = 1; j < x.length; j++) {
+      if ('ecrpE'.includes(x[j])) return true;
+      if ((VALUED[first] || '').includes(x[j])) { if (j === x.length - 1) k++; break; }
+    }
+  }
+  return false;
+}
 const firstWord = (s) => { const m = /^("[^"]*"|'[^']*'|\S+)\s*([\s\S]*)$/.exec(s); return m ? [m[1], m[2]] : [s, '']; };
 
 const autoOn = (s) => !!s && s.commandMode === 'auto';
@@ -122,10 +149,8 @@ function decide(input, office, opts = {}) {
     return opts.chat ? { decision: 'deny', reason: `"${d.trim()}" is never run from the dashboard. The boss runs it in a terminal (or asks for it in Needs your OK).` } : { decision: null };
   }
   for (const p of parts) {
-    const w = words(p);
-    const ws = w[0] === 'npm' && w.includes('--') ? w.slice(0, w.indexOf('--')) : w; // npm: words after a bare -- belong to the script
-    const f = (DENY_FLAGS[w[0]] || []).find((d) => ws.some((x, k) => k && /^-/.test(x) && flagHit(w[0], x, d)));
-    if (f) return opts.chat ? { decision: 'deny', reason: GLOBAL_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: it installs outside the project.` : MOVE_FLAGS.includes(f) ? `"${f}" is not allowed with ${w[0]}: use cd "<folder>" && first.` : `"${f}" is not allowed with ${w[0]}: it can run or delete anything.` } : { decision: null };
+    const f = flagRefusal(words(p));
+    if (f) return opts.chat ? { decision: 'deny', reason: f } : { decision: null };
   }
   // The manager's list needs positive proof: a dashboard chat started as the manager (AI_OFFICE_WHO=pa), no subagent, not in a staff folder.
   const underStaff = P.relative(office.dir, input.cwd || office.dir).split(/[\\/]/)[0] === 'staff';
@@ -160,13 +185,20 @@ function decide(input, office, opts = {}) {
     }
     const w = words(p);
     if (w[0] === 'git' && /^-/.test(w[1] || '') && !['--version', '--help'].includes(w[1])) return no('Put the git command right after git (only -C "<folder>" may come first).');
-    if (auto) { // an Auto staff has no list to catch these: run by name, no wrapper, no code on the command line
-      const [first, ...args] = w;
-      if (/[\\/]/.test(firstWord(p)[0])) return no('Run the command by its name, not by a path.');
+    if (auto) { // an Auto staff has no list to catch these: one plain command, no wrapper, no code on the command line
+      const prog = firstWord(p)[0].replace(/["']/g, ''), segs = prog.split(win ? /[\\/]/ : '/');
+      let [first, ...args] = w;
+      if (segs.length > 1) { // a path: only inside the project (./vendor/bin/phpunit), and never to a never-list program
+        if (!segs.every((x) => PLAIN.test(x) && x !== '..')) return no('Run the command by its name, or by a path inside the project (like ./vendor/bin/phpunit), not by a full path.');
+        first = programName(segs[segs.length - 1]);
+        if (NEVER_PROGRAMS.includes(first)) return no(`Run ${first} by its name, not by a path.`);
+        const f = flagRefusal([first, ...args]);
+        if (f) return no(f);
+      } else if (!PLAIN.test(prog)) return no('Run one plain command: start with the program\'s name.');
       if (WRAPPERS.includes(first)) return no(`Run the command itself, not through ${first}.`);
       const code = args.some((x, k) => /^--(import|experimental-loader|loader)=data:/.test(x) || (/^--(import|experimental-loader|loader)$/.test(x) && /^data:/.test(args[k + 1] || '')));
       if (['node', 'bun', 'deno'].includes(first) && code || (first === 'deno' && ['eval', 'repl'].includes(args[0])) || (first === 'git' && ['clone', 'ls-remote'].includes(args[0]) && args.some((x) => /^-[A-Za-z]*u/.test(x)))) return no('Save the code in a file in the project and run the file.');
-      if (INTERPRETERS.includes(first) && args.some((x) => (/^-[A-Za-z]*[ecrpE]/.test(x) && !/^-m/.test(x)) || /^--(eval|print|command)(=|$)/.test(x))) return no('Save the code in a file in the project and run the file.');
+      if (INTERPRETERS.includes(first) && inlineCode(first, args)) return no('Save the code in a file in the project and run the file.');
     }
     if (!allowed.some((a) => starts(p, a))) {
       if (auto) { undecided = true; continue; }
