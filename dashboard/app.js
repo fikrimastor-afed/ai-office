@@ -577,7 +577,8 @@ function renderSettings() {
       <span class="muted">${mgrName()}</span><span>${esc(pa().name)}</span>
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
       <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span>
-      <span class="muted">Staff working at the same time</span><span><input class="in" id="parN" type="number" min="1" max="8" value="${esc(S.limit || 3)}" style="width:70px"> <button class="btn sm" id="parSave">Save</button><div class="muted" style="margin-top:4px">More at once is faster and uses your Claude plan faster.</div></span></div>
+      <span class="muted">Staff working at the same time</span><span><input class="in" id="parN" type="number" min="1" max="8" value="${esc(S.limit || 3)}" style="width:70px"> <button class="btn sm" id="parSave">Save</button><div class="muted" style="margin-top:4px">More at once is faster and uses your Claude plan faster.</div></span>
+      <span class="muted">Agent teams in the terminal</span><span><label><input type="checkbox" id="teamsOn" ${S.office.agentTeams === true || (S.office.type === 'software' && S.office.agentTeams !== false) ? 'checked' : ''}> On</label><div class="muted" style="margin-top:4px">When you run claude in the office folder, the manager can lead your staff as a Claude Code agent team. Experimental. The dashboard does not use it.</div></span></div>
       <p class="muted" style="margin-top:16px;line-height:1.6">To change the company or manager's name, ask Claude in the office folder, for example <i>"rename the company to Kedai Ali Sdn Bhd"</i>. Everything is plain files: OFFICE.md explains each one.</p>`,
     addons: `<div class="featured"><div class="fhead"><img src="assets/invois-icon.png" alt=""><div><h2>invois.online</h2><div class="muted">Real quotations, invoices and payments for your sales and finance staff. Made by the team behind AI Office.</div></div></div>
       <div class="fbody">${inv && inv.enabled ? `Turned on for: <b>${(inv.staff || []).map((id) => esc(nameOf(id))).join(', ') || 'no staff yet'}</b>.<br>Not logged in yet? Ask ${esc(pa().name)} in chat: <i>"log in to invois.online"</i>, and sign in in your browser.
@@ -614,6 +615,7 @@ function renderSettings() {
   wireSplits($('#v-settings'));
   $$('[data-s]').forEach((b) => { b.onclick = () => { S.settings = b.dataset.s; renderSettings(); }; });
   const ps = $('#parSave'); if (ps) ps.onclick = () => { ps.disabled = true; api('parallel', 'PUT', { n: Number($('#parN').value) }).then((r) => { S.limit = r.maxParallel; toast('Saved'); }, (er) => toast(er.message, true)).finally(() => { ps.disabled = false; }); };
+  const tm = $('#teamsOn'); if (tm) tm.onchange = () => { tm.disabled = true; api('agent-teams', 'PUT', { on: tm.checked }).then((r) => { S.office.agentTeams = r.agentTeams; toast('Saved'); }, (er) => { toast(er.message, true); tm.checked = !tm.checked; }).finally(() => { tm.disabled = false; }); };
   const ks = $('#keyShow'); if (ks) ks.onclick = () => { $('#keyV').textContent = KEY; ks.remove(); };
   if (S.settings === 'linked') {
     const show = (list) => {

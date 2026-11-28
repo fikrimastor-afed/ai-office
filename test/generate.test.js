@@ -226,5 +226,47 @@ test('the manager: a software office starts with GitHub look-ups, a business off
   assert.deepStrictEqual(JSON.parse(T.officeJson(odd)).pa.commands, ['github']);
 });
 
+test('agent teams: on for a software office, root settings only, user settings kept', () => {
+  const O = require('../lib/office');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-teams-'));
+  G.writeOffice(dir, softwareCfg);
+  const root = () => JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'));
+  const staff0 = () => JSON.parse(fs.readFileSync(path.join(dir, 'staff', softwareCfg.staff[0].id, '.claude', 'settings.json'), 'utf8'));
+  assert.strictEqual(root().env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, '1');
+  assert.ok(!staff0().env);
+  for (const ev of ['TeammateIdle', 'TaskCreated', 'TaskCompleted']) assert.ok(root().hooks[ev]);
+  const s = root(); s.env.MY_VAR = 'x'; s.myOwn = true; fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify(s));
+  O.setAgentTeams(dir, false);
+  assert.deepStrictEqual(root().env, { MY_VAR: 'x' }); assert.strictEqual(root().myOwn, true);
+  O.setAgentTeams(dir, true);
+  assert.deepStrictEqual(root().env, { MY_VAR: 'x', CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' });
+  assert.ok(!staff0().env);
+  assert.throws(() => O.setAgentTeams(dir, 'yes'), /on must be true or false/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('agent teams: a business office, and one from before this update, get no env at all', () => {
+  const O = require('../lib/office');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-old-'));
+  G.writeOffice(dir, businessCfg);
+  const f = path.join(dir, 'office.json'), j = JSON.parse(fs.readFileSync(f, 'utf8')); delete j.type; fs.writeFileSync(f, JSON.stringify(j));
+  const rootF = path.join(dir, '.claude', 'settings.json');
+  G.repairSettings(dir);
+  assert.ok(!('env' in JSON.parse(fs.readFileSync(rootF, 'utf8'))));
+  // switching off with nothing to remove leaves a user's own empty env alone; removing our last key drops the env
+  const s = JSON.parse(fs.readFileSync(rootF, 'utf8')); s.env = {}; fs.writeFileSync(rootF, JSON.stringify(s));
+  G.repairSettings(dir);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(rootF, 'utf8')).env, {});
+  O.setAgentTeams(dir, true);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(rootF, 'utf8')).env, { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' });
+  O.setAgentTeams(dir, false);
+  assert.ok(!('env' in JSON.parse(fs.readFileSync(rootF, 'utf8'))));
+  assert.strictEqual(T.agentTeamsOn({ type: 'software' }), true);
+  assert.strictEqual(T.agentTeamsOn({ type: 'software', agentTeams: false }), false);
+  assert.strictEqual(T.agentTeamsOn({ agentTeams: true }), true);
+  assert.strictEqual(T.agentTeamsOn({}), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);

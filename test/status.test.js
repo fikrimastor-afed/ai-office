@@ -81,6 +81,14 @@ test('direct chat in a staff folder, and the terminal permission banner', () => 
   assert.strictEqual(snap().people.siti.status, 'sleeping');
 });
 
+test('agent team hook events are ignored', () => {
+  const before = JSON.stringify(snap().people);
+  for (const e of ['TeammateIdle', 'TaskCreated', 'TaskCompleted']) ev({ ev: e, sid: 'T', cwd: dir });
+  const x = snap();
+  assert.deepStrictEqual(Object.fromEntries(Object.entries(x.people).map(([k, v]) => [k, v.status])), Object.fromEntries(Object.entries(JSON.parse(before)).map(([k, v]) => [k, v.status])));
+  assert.strictEqual(x.banner, null);
+});
+
 test('work nobody heard from in a while ages out', () => {
   clock += STALE + 1000;
   const x = s.snapshot(people, new Set(), clock);

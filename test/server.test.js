@@ -257,6 +257,18 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       assert.strictEqual(t.body.limit, 2); assert.ok(Array.isArray(t.body.waiting));
     });
 
+    await test('agent teams: PUT /api/agent-teams adds and removes the root settings key, bad values answer 400', async () => {
+      const rootSettings = () => JSON.parse(read('.claude/settings.json'));
+      const r = await req('PUT', '/api/agent-teams', { on: true });
+      assert.deepStrictEqual(r.body, { agentTeams: true });
+      assert.strictEqual(rootSettings().env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, '1');
+      assert.strictEqual((await req('GET', '/api/office')).body.agentTeams, true);
+      const r2 = await req('PUT', '/api/agent-teams', { on: false });
+      assert.deepStrictEqual(r2.body, { agentTeams: false });
+      assert.ok(!rootSettings().env || !('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS' in rootSettings().env));
+      assert.strictEqual((await req('PUT', '/api/agent-teams', { on: 'yes' })).status, 400);
+    });
+
     await test('a waiting task whose need was stopped is told to the manager once, in plain words', async () => {
       const put = (id, head, text) => fs.writeFileSync(path.join(dir, 'tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
       const until = async (fn) => { for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
