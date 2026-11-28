@@ -328,6 +328,36 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       assert.strictEqual((await req('POST', '/api/staff/nurul/reactivate')).status, 200);
       await new Promise((r) => setTimeout(r, 600)); // let the file watch settle before the office is removed
     });
+    await test('add staff: a software office gets the software text, the default rules and commands; a business office is unchanged', async () => {
+      const O = require('../lib/office'), T = require('../lib/templates');
+      const sdir = path.join(tmp, 'soft');
+      G.writeOffice(sdir, G.buildConfig({ company: 'Acme Labs', pa: 'Hana', type: 'software', staff: D.SOFTWARE_STAFF.slice(0, 2).map(({ name, role, job }) => ({ name, role, job })) }));
+      const sread = (...q) => fs.readFileSync(path.join(sdir, ...q), 'utf8');
+      const arif = D.SOFTWARE_STAFF.find((d) => d.name === 'Arif');
+      O.addStaff(sdir, { name: 'Arif', role: 'DevOps Engineer', job: arif.job });
+      const t = sread('staff/arif/CLAUDE.md');
+      assert.match(t, /deploy, publish a package, delete data, change a live setting or a secret/);
+      assert.doesNotMatch(t, /discount or refund/);
+      for (const r of arif.rules) assert.ok(t.includes(`- ${r}`), r);
+      assert.match(t, /^- Commands you may run/m);
+      assert.deepStrictEqual(JSON.parse(sread('office.json')).staff.find((s) => s.id === 'arif').commands, ['git', 'node']);
+      assert.match(sread('.claude/agents/arif.md'), /^tools: .*\bBash\b/m);
+      O.addStaff(sdir, { name: 'Ali', role: 'backend engineer', job: 'APIs' }); // renamed: the role default still counts
+      assert.deepStrictEqual(JSON.parse(sread('office.json')).staff.find((s) => s.id === 'ali').commands, ['git', 'node']);
+      assert.ok(sread('staff/ali/CLAUDE.md').includes('- Commit small, with a message that says why.'));
+      // business: exactly what the add gave before
+      const bdir = path.join(tmp, 'biz');
+      const bcfg = G.buildConfig({ company: 'Kedai Ali', pa: 'Hana', staff: D.STAFF.slice(0, 2).map(({ name, role, job }) => ({ name, role, job })) });
+      G.writeOffice(bdir, bcfg);
+      const farah = D.STAFF.find((d) => d.name === 'Farah');
+      O.addStaff(bdir, { name: 'Farah', role: 'Marketing', job: farah.job });
+      const oc = JSON.parse(fs.readFileSync(path.join(bdir, 'office.json'), 'utf8'));
+      const s = { id: 'farah', name: 'Farah', role: 'Marketing', job: farah.job, colour: oc.staff[2].colour, rules: farah.rules, look: farah.look };
+      const full = { company: bcfg.company, pa: oc.pa, addons: oc.addons, staff: [...oc.staff.slice(0, 2), s] };
+      assert.strictEqual(fs.readFileSync(path.join(bdir, 'staff/farah/CLAUDE.md'), 'utf8'), T.staffClaude(full, s));
+      assert.strictEqual(fs.readFileSync(path.join(bdir, '.claude/agents/farah.md'), 'utf8'), T.agentMd(full, s));
+      assert.deepStrictEqual(oc.staff[2], { id: 'farah', name: 'Farah', role: 'Marketing', colour: s.colour, look: farah.look });
+    });
   } finally {
     await srv.close();
     fs.rmSync(tmp, { recursive: true, force: true });

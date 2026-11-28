@@ -278,5 +278,18 @@ test('OFFICE.md documents the software settings and has no dashes', () => {
   }
 });
 
+test('software office: a renamed engineer keeps the role default rules and commands; business unchanged', () => {
+  const a = { company: 'Acme Labs', pa: 'Hana', staff: [{ name: 'Ali', role: 'Backend Engineer', job: 'APIs' }, { name: 'Bo', role: ' qa engineer ', job: 'Tests' }] };
+  const sw = G.buildConfig({ ...a, type: 'software' });
+  const eng = D.SOFTWARE_STAFF.find((d) => d.role === 'Backend Engineer');
+  assert.deepStrictEqual(sw.staff[0].commands, ['git', 'node']);
+  assert.deepStrictEqual(sw.staff[0].rules, eng.rules);
+  assert.deepStrictEqual(sw.staff[1].rules, D.SOFTWARE_STAFF.find((d) => d.role === 'QA Engineer').rules);
+  assert.deepStrictEqual(sw.staff[0].look, { ...D.LOOK }, 'the look is not copied');
+  const biz = G.buildConfig(a);
+  assert.ok(!('commands' in biz.staff[0]));
+  assert.deepStrictEqual(biz.staff[0].rules, D.GENERIC_RULES);
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);
