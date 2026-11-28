@@ -304,12 +304,13 @@ if (require.main === module) {
       return say(r);
     }
     if (input.tool_name !== 'Bash') return;
-    // linked folders: office-wide, plus each project's "linked:" line
+    // linked folders: office-wide, plus each project's "linked:" line when the boss set that same folder (office.json projectLinks)
+    const links = office.projectLinks || {}, same = (a, b) => { const r = (x) => (process.platform === 'win32' ? path.resolve(x).toLowerCase() : path.resolve(x)); return r(a) === r(b); };
     const linked = (office.linked || []).map((l) => l.path);
     try {
       for (const p of fs.readdirSync(path.join(dir, 'projects'))) {
         const m = /^linked:\s*(.+?)\s*(?:\s#\s.*)?$/m.exec(fs.readFileSync(path.join(dir, 'projects', p, 'CLAUDE.md'), 'utf8'));
-        if (m) linked.push(m[1]);
+        if (m && links[p] && same(links[p], m[1])) linked.push(m[1]);
       }
     } catch { /* no projects */ }
     const r = decide(input, { ...office, dir, linked }, { chat: process.env.AI_OFFICE_CHAT === '1', who: process.env.AI_OFFICE_WHO });

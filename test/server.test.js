@@ -298,6 +298,30 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       await until(async () => prompts().some((m) => m.includes('task b3')));
       assert.ok(prompts().find((m) => m.includes('task b3')).includes('Waiting for this task: b4, b5. To retry, write the new task with again: b3.'));
     });
+    await test('project links: set only by the Projects page, adopted once for an older office', async () => {
+      const O = require('../lib/office');
+      const ext = path.join(tmp, 'proj link'); fs.mkdirSync(ext);
+      const links = () => JSON.parse(read('office.json')).projectLinks || {};
+      assert.strictEqual((await req('PUT', '/api/projects/kedai-ali-website', { linked: ext })).status, 200);
+      assert.match(read('projects/kedai-ali-website/CLAUDE.md'), new RegExp(`^linked: ${ext.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}$`, 'm'));
+      assert.strictEqual(links()['kedai-ali-website'], ext);
+      assert.deepStrictEqual(O.listLinked(dir).map((l) => [l.project, l.ok]), [['kedai-ali-website', true]]);
+      await req('PUT', '/api/projects/kedai-ali-website', { linked: '' });
+      assert.ok(!('kedai-ali-website' in links())); assert.doesNotMatch(read('projects/kedai-ali-website/CLAUDE.md'), /^linked:[ \t]*\S/m);
+      // an office from before: a project line, no projectLinksAdopted
+      const d3 = path.join(tmp, 'office3'); G.writeOffice(d3, G.buildConfig({ company: 'Three', pa: 'Hana', staff: D.STAFF.slice(0, 1).map(({ name, role, job }) => ({ name, role, job })) }));
+      const f3 = path.join(d3, 'office.json'), c3 = JSON.parse(fs.readFileSync(f3, 'utf8')); assert.strictEqual(c3.projectLinksAdopted, true, 'a new office needs no adoption');
+      delete c3.projectLinksAdopted; fs.writeFileSync(f3, JSON.stringify(c3));
+      const p3 = O.createProject(d3, { title: 'Old shop' });
+      fs.writeFileSync(path.join(d3, 'projects', p3.id, 'CLAUDE.md'), `---\nlinked: ${ext}\n---\n# Old shop\n`);
+      assert.deepStrictEqual(G.linkedFolders(d3), [], 'not adopted yet: not trusted');
+      assert.deepStrictEqual(O.adoptProjectLinks(d3), [p3.id]);
+      assert.deepStrictEqual(G.linkedFolders(d3).map((l) => l.project), [p3.id]);
+      const p4 = O.createProject(d3, { title: 'Sneaky' });
+      fs.writeFileSync(path.join(d3, 'projects', p4.id, 'CLAUDE.md'), `---\nlinked: ${ext}\n---\n# Sneaky\n`);
+      assert.deepStrictEqual(O.adoptProjectLinks(d3), [], 'adopts once');
+      assert.deepStrictEqual(G.linkedFolders(d3).map((l) => l.project), [p3.id]);
+    });
     await test('a change to office.json is picked up by waiting tasks at once', async () => {
       // its own fresh office: on Linux, Node's recursive watch can lose a file after it was swapped in once
       const dir2 = path.join(tmp, 'office2'); G.writeOffice(dir2, G.buildConfig({ company: 'Two', pa: 'Hana', staff: D.STAFF.slice(0, 2).map(({ name, role, job }) => ({ name, role, job })) }));

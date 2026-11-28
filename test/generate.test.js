@@ -371,5 +371,19 @@ test('agent team hook events: software root only while agent teams is on; never 
   assert.strictEqual(T.staffClaude(softwareCfg, softwareCfg.staff[1]), T.staffClaude(softwareCfg, { ...softwareCfg.staff[1], commandMode: 'listed' }));
 }
 
+// a project's linked folder counts only when the boss set it (office.json projectLinks), not by the staff-editable file line
+test('linkedFolders: a project link needs the boss-set entry for the same folder', () => {
+  const d = fs.mkdtempSync(path.join(tmp, 'pl-')), A = path.join(d, 'A'), B = path.join(d, 'B'), off = path.join(d, 'office');
+  fs.mkdirSync(A); fs.mkdirSync(B); fs.mkdirSync(path.join(off, 'projects', 'shop'), { recursive: true });
+  const oc = (links) => fs.writeFileSync(path.join(off, 'office.json'), JSON.stringify({ projectLinksAdopted: true, ...(links ? { projectLinks: links } : {}) }));
+  fs.writeFileSync(path.join(off, 'projects', 'shop', 'CLAUDE.md'), `---\nlinked: ${A}\n---\n# Shop\n`);
+  oc();
+  assert.deepStrictEqual(G.linkedFolders(off), [], 'no entry: not returned');
+  oc({ shop: A });
+  assert.deepStrictEqual(G.linkedFolders(off), [{ path: A, label: '', project: 'shop' }], 'entry and line agree: returned');
+  oc({ shop: B });
+  assert.deepStrictEqual(G.linkedFolders(off), [], 'entry says B, file says A: not returned');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);
