@@ -225,4 +225,13 @@ test('npm cannot be pointed outside the folder or install for the whole computer
   for (const c of ['npm install', 'npm install --prefer-offline', 'npm ci', 'npm run build', 'npm test -- --grep prefix', 'npm ls --long', 'pnpm install', 'yarn install']) allow(c, o);
 });
 
+test('npm and pnpm: combined and shortened flags cannot go global or move the folder', () => {
+  const o = { agent: 'irfan' };
+  for (const c of ['npm install -gf x', 'npm install -fg x', 'npm install -sg x', 'npm i -gs x', 'npm install -ddg x', 'npm install --gl x', 'npm install --gf x', 'npm install -sC /tmp',
+    'npm install -L global x', 'npm install -sL global x', 'npm install -prefi /x', 'npm install -prefi=/x', 'npm install -locatio global x', 'pnpm install --glob', 'pnpm i -sg x']) deny(c, o);
+  for (const c of ['npm install --legacy-peer-deps', 'npm install --save-dev x', 'npm install --save-exact x', 'npm install --prefer-offline', 'npm ls --long', 'npm install -D x', 'npm install -E x',
+    'npm install --no-global', 'npm run build --if-present', 'npm ci --silent', 'npm install -s', 'npm install -d', 'npm install -f', 'npm install --force', 'npm ci --ci',
+    'npm test -- -g pattern', 'npm test -- -gf', 'pnpm install --frozen-lockfile']) allow(c, o);
+});
+
 console.log(`\n${n} guard tests passed`);
