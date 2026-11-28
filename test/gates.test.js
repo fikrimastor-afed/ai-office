@@ -6,6 +6,8 @@
 //   LONG                  takes longer
 //   SWITCH <branch>       switches the worktree to a new branch
 //   SWAP <folder>         replaces the worktree with a link to that folder and writes x.txt there
+//   CHECKOUT <branch>     checks out that branch in the worktree (lines run in order)
+//   SLOWFIX               the session's follow-ups take longer
 // A prompt asking to "run git merge office/<job>" makes it merge and resolve the conflict ("resolved").
 const assert = require('assert');
 const fs = require('fs');
@@ -25,18 +27,19 @@ const msg = a[a.indexOf('-p') + 1];
 fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, msg, cwd: process.cwd(), at: Date.now() }) + '\\n');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const resume = a.includes('--resume') ? a[a.indexOf('--resume') + 1] : '';
-const sid = resume || (msg.includes('STUBBORN') ? 'stubborn-' : 'sess-') + Date.now() + '-' + process.pid;
+const sid = resume || (msg.includes('STUBBORN') ? 'stubborn-' : msg.includes('SLOWFIX') ? 'slowfix-' : 'sess-') + Date.now() + '-' + process.pid;
 out({ type: 'system', subtype: 'init', session_id: sid });
 const m = /Work only in (.+?)\\. It is its own copy/.exec(msg), wt = m ? m[1] : '';
 const g = (...x) => spawnSync('git', ['-C', wt, ...x], { encoding: 'utf8' });
 setTimeout(() => {
   if (wt) {
-    for (const [, how, file, text] of msg.matchAll(/^(WRITE|LEAVE) (\\S+) (.*)$/gm)) {
-      fs.writeFileSync(path.join(wt, file), text + '\\n');
-      if (how === 'WRITE') { g('add', '-A'); g('commit', '-m', 'write ' + file); }
+    for (const line of msg.split('\\n')) { // in order
+      const w = /^(WRITE|LEAVE) (\\S+) (.*)$/.exec(line);
+      if (w) { fs.writeFileSync(path.join(wt, w[2]), w[3] + '\\n'); if (w[1] === 'WRITE') { g('add', '-A'); g('commit', '-m', 'write ' + w[2]); } }
+      const sw = /^SWITCH (\\S+)$/.exec(line); if (sw) g('checkout', '-q', '-b', sw[1]);
+      const co = /^CHECKOUT (\\S+)$/.exec(line); if (co) g('checkout', '-q', co[1]);
+      const swap = /^SWAP (.+)$/.exec(line); if (swap) { fs.rmSync(wt, { recursive: true, force: true }); fs.symlinkSync(swap[1], wt, 'dir'); fs.writeFileSync(path.join(swap[1], 'x.txt'), 'x'); }
     }
-    const sw = /^SWITCH (\\S+)$/m.exec(msg); if (sw) g('checkout', '-q', '-b', sw[1]);
-    const swap = /^SWAP (.+)$/m.exec(msg); if (swap) { fs.rmSync(wt, { recursive: true, force: true }); fs.symlinkSync(swap[1], wt, 'dir'); fs.writeFileSync(path.join(swap[1], 'x.txt'), 'x'); }
     const mm = /run git merge (office\\/[^,\\s]+),/.exec(msg);
     if (mm && !sid.startsWith('stubborn')) {
       if (g('merge', '--no-edit', mm[1]).status !== 0) {
@@ -47,7 +50,7 @@ setTimeout(() => {
   }
   out({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'Done: ' + msg.split('\\n')[2] }] } });
   out({ type: 'result', subtype: 'success', is_error: false });
-}, msg.includes('LONG') ? 2000 : 300);
+}, msg.includes('LONG') ? 2000 : sid.startsWith('slowfix') && resume ? 2500 : 300);
 `;
 if (process.platform === 'win32') {
   fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\n');
@@ -391,10 +394,62 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     soft2.job('q4', p2); soft2.jobs.setStatus('q4', 'approved'); soft2.tasks.scan();
     await until(() => ['done', 'failed'].includes(soft2.status('w1')));
     assert.strictEqual(soft2.status('w1'), 'failed');
-    assert.ok(soft2.tasks.read('w1').result.endsWith(`The work is on branch feature, not office/w1. Nothing was merged. The worktree is still at ${wt}.`), soft2.tasks.read('w1').result);
+    assert.ok(soft2.tasks.read('w1').result.endsWith(`The work is on branch feature, not office/w1. Nothing was merged. The worktree is still at ${wt} until the office restarts; commits on feature stay in the project.`), soft2.tasks.read('w1').result);
     assert.ok(fs.existsSync(path.join(wt, 's.txt')));
     assert.strictEqual(show(r2, 'office/q4:s.txt'), null);
     assert.strictEqual(git(r2, 'rev-parse', 'feature'), git(r2, 'rev-parse', 'office/q4'), 'nothing committed onto feature');
+  });
+
+  await test('a worktree left on another branch blocks nothing; a follow-up works there once it is back on its branch', async () => {
+    soft2.put('n2', `staff: ${t1}\nproject: ${p2}\njob: q6\nkind: code`, 'Other work\nWRITE n.txt n');
+    soft2.job('q6', p2); soft2.jobs.setStatus('q6', 'approved'); soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('n2')));
+    assert.strictEqual(soft2.status('n2'), 'done', soft2.tasks.read('n2').result);
+    assert.strictEqual(show(r2, 'office/q6:n.txt'), 'n');
+    const wt = path.join(soft2.dir, 'worktrees', 'w1');
+    soft2.put('wf1', `staff: ${t0}\ncontinues: w1`, 'Still off\nWRITE ff.txt ff');
+    await sleep(20); soft2.put('wf2', `staff: ${t0}\ncontinues: w1`, 'Back\nCHECKOUT office/w1\nWRITE fb.txt fb');
+    soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('wf2')));
+    assert.strictEqual(soft2.status('wf1'), 'failed');
+    assert.ok(soft2.tasks.read('wf1').result.endsWith(`The work is on branch feature, not office/w1. Nothing was merged. The worktree is still at ${wt} until the office restarts; commits on feature stay in the project.`));
+    assert.strictEqual(soft2.status('wf2'), 'done', soft2.tasks.read('wf2').result);
+    assert.strictEqual(show(r2, 'office/q4:fb.txt'), 'fb');
+    assert.strictEqual(show(r2, 'feature:ff.txt'), 'ff', 'commits on feature stay');
+    assert.ok(!fs.existsSync(wt));
+    // a detached worktree and one on another branch, left for the restart below
+    soft2.put('dt1', `staff: ${t0}\nproject: ${p2}\njob: q6\nkind: code`, 'Detach\nLEAVE d.txt d\nCHECKOUT --detach');
+    await sleep(20); soft2.put('e1', `staff: ${t0}\nproject: ${p2}\njob: q6\nkind: code`, 'Off again\nSWITCH feature2\nWRITE e.txt e');
+    soft2.tasks.scan();
+    await until(() => ['done', 'failed'].includes(soft2.status('e1')));
+    assert.ok(soft2.tasks.read('dt1').result.endsWith(`The work is not on a branch (detached), not on office/dt1. Nothing was merged. The worktree is still at ${path.join(soft2.dir, 'worktrees', 'dt1')} until the office restarts.`), soft2.tasks.read('dt1').result);
+    assert.strictEqual(soft2.status('e1'), 'failed');
+  });
+
+  await test('a stopped checking task whose follow-up is running: the run is stopped, then the worktree removed', async () => {
+    soft2.put('o1', `staff: ${t0}\nproject: ${p2}\njob: q7\nkind: code`, 'O one\nWRITE c.txt o1');
+    soft2.put('o2', `staff: ${t1}\nproject: ${p2}\njob: q7\nkind: code`, 'O two LONG SLOWFIX\nWRITE c.txt o2');
+    soft2.job('q7', p2); soft2.jobs.setStatus('q7', 'approved'); soft2.tasks.scan();
+    await until(() => fixOf('o2') && fixOf('o2').status === 'working');
+    assert.ok(soft2.tasks.stop('o2').ok);
+    assert.strictEqual(soft2.status('o2'), 'stopped');
+    await until(() => fixOf('o2').status === 'stopped');
+    await until(() => !fs.existsSync(path.join(soft2.dir, 'worktrees', 'o2')));
+  });
+
+  await test("the office knows its own conflict follow-up by the id it recorded, not by its fixes: line", async () => {
+    soft2.put('x1', `staff: ${t0}\nproject: ${p2}\njob: q8\nkind: code`, 'X one\nWRITE d.txt x1');
+    soft2.put('x2', `staff: ${t1}\nproject: ${p2}\njob: q8\nkind: code`, 'X two LONG\nWRITE d.txt x2');
+    await sleep(20); soft2.put('x3', `staff: ${t1}`, 'Busy third LONG');
+    soft2.job('q8', p2); soft2.jobs.setStatus('q8', 'approved'); soft2.tasks.scan();
+    await until(() => fixOf('x2') && soft2.status('x3') === 'working');
+    const fid = fixOf('x2').id, f = path.join(soft2.dir, 'tasks', `${fid}.md`);
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^fixes: .*\n/m, ''));
+    soft2.tasks.scan();
+    assert.strictEqual(soft2.tasks.board().checking.find((x) => x.id === 'x2').reason, `Waiting for ${nameOf(t1)} to fix the merge`);
+    await until(() => ['done', 'failed'].includes(soft2.status('x2')));
+    assert.strictEqual(soft2.status('x2'), 'done', soft2.tasks.read('x2').result);
+    assert.strictEqual(show(r2, 'office/q8:d.txt'), 'resolved');
   });
 
   await test("a project's code folder that is a link, or holds a planted .git file: held, nothing done outside", async () => {
@@ -412,6 +467,15 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === 'i2').reason, CODE_BAD);
     assert.deepStrictEqual(fs.readdirSync(out), [], 'no git init outside');
     soft2.tasks.stop('i2');
+    const ps = project(soft2, 'Shared objects'), code2 = path.join(soft2.dir, 'projects', ps, 'code'), refs = git(r2, 'for-each-ref');
+    fs.mkdirSync(path.join(code2, '.git'), { recursive: true });
+    for (const x of ['HEAD', 'config']) fs.copyFileSync(path.join(r2, '.git', x), path.join(code2, '.git', x));
+    for (const x of ['objects', 'refs']) fs.symlinkSync(path.join(r2, '.git', x), path.join(code2, '.git', x), 'dir');
+    soft2.put('i3', `staff: ${t0}\nproject: ${ps}\njob: x9\nkind: code`, 'Shared\nWRITE i.txt i');
+    soft2.job('x9', ps); soft2.jobs.setStatus('x9', 'approved'); soft2.tasks.scan(); await sleep(300);
+    assert.strictEqual(soft2.tasks.board().waiting.find((x) => x.id === 'i3').reason, CODE_BAD);
+    assert.strictEqual(git(r2, 'for-each-ref'), refs, 'the other repo gains no branch');
+    soft2.tasks.stop('i3');
   });
 
   await test('a task and a job with the same name: the task fails, or the job waits, with a plain reason', async () => {
@@ -458,9 +522,11 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     again.gates.recover(); await sleep(200);
     const reg = JSON.parse(fs.readFileSync(path.join(soft2.dir, '.office', 'gates.json'), 'utf8'));
     for (const id of ['g1', 'm1', 'f1', 'f2', 'h2']) assert.ok(!reg[id], `${id} dropped`);
-    assert.ok(reg.w1, 'a failed task whose worktree is still there is kept');
+    for (const id of ['e1', 'dt1']) { assert.ok(!fs.existsSync(path.join(soft2.dir, 'worktrees', id)), `${id}: removed at restart`); assert.ok(!reg[id], `${id} dropped`); }
+    assert.strictEqual(show(r2, 'feature2:e.txt'), 'e', 'the commits on the other branch stay');
     if (!canLink) return console.log('  (skip: links need privileges here)');
     const root = path.join(soft2.dir, 'worktrees'), bak = path.join(soft2.dir, 'wt-bak');
+    assert.ok(R.addWorktree(r2, path.join(root, 'live1'), 'office/live1', 'main', root).ok); // registered; must stay registered (no prune through a linked root)
     fs.renameSync(root, bak);
     const elsewhere = path.join(tmp, 'elsewhere'); fs.mkdirSync(path.join(elsewhere, 'v1'), { recursive: true }); fs.writeFileSync(path.join(elsewhere, 'v1', 'keep.txt'), 'k');
     fs.symlinkSync(elsewhere, root, 'dir');
@@ -473,7 +539,26 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     third.tasks.scan(); await sleep(300);
     assert.strictEqual(third.tasks.board().waiting.find((x) => x.id === 'v2').reason, ROOT_BAD(soft2.dir));
     third.tasks.stop('v2');
+    assert.ok(R.listWorktrees(r2).some((w) => w.branch === 'office/live1'), 'no prune while the root is a link');
     fs.unlinkSync(root); fs.renameSync(bak, root);
+    assert.ok(R.removeWorktree(r2, path.join(root, 'live1'), root).ok);
+  });
+
+  await test('a follow-up stays a coding task: after a restart it gets its own branch from the job branch; a plain follow-up stays plain', async () => {
+    const e = engine(soft2.dir);
+    e.put('u1', `staff: ${t0}\ncontinues: m1`, 'After restart\nWRITE u.txt u');
+    e.tasks.scan();
+    await until(() => ['done', 'failed'].includes(e.status('u1')));
+    const u = e.tasks.read('u1');
+    assert.strictEqual(u.status, 'done', u.result);
+    assert.strictEqual(u.kind, 'code'); assert.strictEqual(u.job, 'q3'); assert.strictEqual(u.project, p2);
+    assert.ok(callOf('After restart').msg.includes(`Work only in ${path.join(soft2.dir, 'worktrees', 'u1')}. It is its own copy of the project on branch office/u1.`));
+    assert.strictEqual(show(r2, 'office/q3:u.txt'), 'u');
+    e.put('nc1', `staff: ${t0}`, 'Plain question'); e.tasks.scan();
+    await until(() => e.status('nc1') === 'done');
+    e.put('nc2', `staff: ${t0}\ncontinues: nc1`, 'Plain follow-up'); e.tasks.scan();
+    await until(() => e.status('nc2') === 'done');
+    assert.ok(!e.tasks.read('nc2').kind); assert.ok(!callOf('Plain follow-up').msg.includes('Work only in'));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
