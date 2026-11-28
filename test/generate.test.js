@@ -150,5 +150,16 @@ test('hook.js appends one trimmed line per event', () => {
   assert.ok(!('prompt' in line));
 });
 
+test('a stuck task: again: is documented; the example header keeps staff, role and continues apart', () => {
+  const c = G.buildConfig({ company: 'Kedai Ali', pa: 'Hana', staff: [D.STAFF[0], D.STAFF[1]] });
+  const office = T.officeMd(c), pa = T.paClaude(c);
+  assert.ok(office.includes('| `again:` | Written when a stopped or failed task is run again. A new task with `again: <old id>` stands in for the old one, so tasks that need the old one go on |'));
+  assert.ok(pa.includes('To retry a failed or stopped task that others wait for, write the new task with `again: <old id>`.'));
+  const blocks = office.slice(office.indexOf('## Task:'), office.indexOf('## Staff Tools')).split('```').filter((b, i) => i % 2);
+  for (const b of blocks) assert.ok(!(/^staff:/m.test(b) && /^role:/m.test(b) && /^continues:/m.test(b)), b);
+  assert.ok(blocks.some((b) => /^staff: \w/m.test(b) && /^needs: /m.test(b)), 'main example: staff and needs');
+  assert.ok(blocks.some((b) => /^role: \w/m.test(b) && /^staff: *(#.*)?$/m.test(b)), 'a role example with staff empty');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${n} tests passed`);
