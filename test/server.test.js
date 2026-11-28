@@ -367,7 +367,7 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       let r = await req('PUT', `/api/staff/${id}`, { commandMode: 'auto' });
       assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.commandMode, 'auto');
       assert.strictEqual(co().commandMode, 'auto'); assert.deepStrictEqual(co().commands, ['git'], 'ticks are kept');
-      assert.match(rd(), /^- Commands: you may run.*Claude Code checks each one/m); assert.doesNotMatch(rd(), /^- Commands you may run/m);
+      assert.match(rd(), /^- Commands: you may run.*Claude Code checks each command and may refuse it/m); assert.doesNotMatch(rd(), /^- Commands you may run/m);
       assert.match(agent(), /^tools: .*\bBash\b/m);
       await req('PUT', `/api/staff/${id}`, { commands: ['git'] }); await req('PUT', `/api/staff/${id}`, { commands: ['git'] }); // saving again does not add the line again
       assert.strictEqual(rd().match(/^- Commands: you may run/gm).length, 1);

@@ -2,6 +2,8 @@
 // It allows only the commands the boss ticked for that staff on the Staff page, run in the
 // office folder or a linked folder. "Office documents" is on for every staff unless the boss turns it off:
 // it lets them run node on a script saved in the office (to make PowerPoint, Excel, Word, PDF, images). Some commands are always refused: the boss runs those.
+// For a staff set to Auto on the Staff page it gives no decision on other commands, so Claude Code's own check decides.
+// The never-list below (ALWAYS_DENY) is refused for everyone, Auto or not.
 // It also checks the "ask first" add-on actions (send a quotation or invoice, record a payment):
 // allowed only when the boss set them to "Always allow" in Settings, or approved this exact one.
 // It decides; it does not run anything and sends nothing anywhere.

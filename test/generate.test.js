@@ -364,8 +364,8 @@ test('agent team hook events: software root only while agent teams is on; never 
 {
   const auto = { ...softwareCfg.staff[1], commandMode: 'auto', commands: [] };
   const md = T.staffClaude(softwareCfg, auto);
-  assert.match(md, /Claude Code checks each one and may refuse it/); assert.match(md, /do not try another spelling/);
-  assert.match(md, /Run a program by its name \(make, npm, pytest\), not by a path/);
+  assert.ok(md.includes('- Commands: you may run the commands the work needs, in the office or a linked folder. One plain command at a time: no | ; > < $ or &, and start with the program\'s name (make, npm, pytest, or a file in the project like ./vendor/bin/phpunit), not a shell or code on the command line. For a linked folder start with cd "<folder>" &&. Claude Code checks each command and may refuse it. Never: git push, reset --hard, publishing, deleting with rm; the boss does those, so if one of those is refused, say so in your report and do not try another way. If a command is refused for its form, run it again in the plain form.'), 'the Auto commands line, word for word');
+  assert.doesNotMatch(md, /do not try another spelling/);
   assert.doesNotMatch(md, /Commands you may run, in the office or a linked folder: /);
   assert.match(T.agentMd(softwareCfg, auto), /^tools: .*Bash/m);
   assert.strictEqual(T.staffClaude(softwareCfg, softwareCfg.staff[1]), T.staffClaude(softwareCfg, { ...softwareCfg.staff[1], commandMode: 'listed' }));

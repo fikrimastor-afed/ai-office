@@ -222,10 +222,15 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.ok(!val(auto, '--allowedTools').split(',').includes('Bash'), 'Bash stays with the guard and the check');
     const st = JSON.parse(val(auto, '--settings')); assert.ok(st.autoMode);
     assert.ok(st.autoMode.environment[1].includes(JSON.stringify(path.resolve(dir))));
-    assert.match(val(auto, '--append-system-prompt'), /Claude Code checks each one/);
+    const autoNote = val(auto, '--append-system-prompt');
+    assert.match(autoNote, /one plain command at a time \(no \| ; > < \$ or &/); assert.match(autoNote, /run it again in the plain form\./);
+    assert.doesNotMatch(autoNote, /another spelling/);
+    assert.ok(autoNote.includes('run it with node "<script>.cjs" (no node -e'), 'Office documents for Auto: no "nothing else is allowed"');
+    assert.doesNotMatch(autoNote, /nothing else is allowed/);
     const other = await run(cfg.staff[0].id);
     assert.deepStrictEqual(other.args, before.args, 'a non-Auto staff run is the same with or without an Auto colleague');
     assert.strictEqual(val(other, '--permission-mode'), 'default'); assert.ok(!other.args.includes('--settings'));
+    assert.match(val(other, '--append-system-prompt'), /run it with exactly node "<script>\.cjs" \(nothing else is allowed: no node -e/, 'listed staff text unchanged');
     const pa = await run('pa');
     assert.strictEqual(val(pa, '--permission-mode'), 'default'); assert.ok(!pa.args.includes('--settings'));
     assert.match(access(dir, 'pa').note, /any command the work needs, checked by Claude Code/);
