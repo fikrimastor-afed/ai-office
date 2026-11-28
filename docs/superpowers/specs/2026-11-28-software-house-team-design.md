@@ -248,7 +248,40 @@ get a fixed tool list without the Skill tool. This section makes it work in the 
   this section is dropped and the terminal stays the place for the skills flow; the rest of the
   design does not depend on it.
 
-### 12. Documentation and tests
+### 12. Commands by auto mode (optional, per staff)
+
+Added 2026-11-28 at the owner's request, after build step 2 showed that a list of allowed
+commands needs constant patching. Claude Code's auto mode has a separate classifier model that
+reviews each action and blocks the risky ones (docs: permission-modes and auto-mode-config,
+checked 2026-11-28). It works in `claude -p --permission-mode auto`; a blocked action is refused
+and the run goes on. The docs warn that it "does not guarantee safety", so it is offered beside
+the guard, not instead of it.
+
+- **A choice per staff** on the Staff page, "Commands": `Listed only` (today's behaviour, the
+  default for everyone) or `Auto (Claude judges each command)`. Saved as `commandMode: "auto"`
+  on the staff in `office.json`. Not offered for the manager, who keeps the read-only GitHub list.
+- **What Auto changes for that staff's dashboard runs:** the run starts with
+  `--permission-mode auto` and has the shell tool; the guard no longer needs the command to be
+  on a ticked list. Their ticked presets are ignored while Auto is on (kept for switching back).
+- **What does not change:** the guard still refuses the always-refused list (push, publish,
+  deploy-like and destructive commands), the refused flags, and anything but plain commands, and
+  still keeps commands inside the office and linked folders. Auto mode would allow `git push` by
+  default; the office does not. File limits and the office's own settings files stay protected.
+- **Telling the classifier what is trusted:** the dashboard passes an `autoMode` block on each
+  run with `--settings` (auto mode does not read it from a project's settings file): the office
+  folder and the linked folders as the trusted environment, and the office's never-list as hard
+  denies.
+- **Terminal use** is unchanged: the user's own Claude Code mode applies there.
+- **Cost:** the Staff page says that Auto adds a check to every command.
+- **Trial first** (`spike/auto-mode-spike.js`, findings in `docs/auto-mode-spike-findings.md`).
+  Build it only if, in runs shaped like the dashboard's: a harmless command runs in auto mode
+  without being pre-allowed; a refusal from the guard hook still stops the command in auto mode;
+  a command inside a linked folder runs; and a run in auto mode costs no more than twice the
+  same run with the command pre-allowed. Also recorded, for information: whether the classifier
+  by itself blocks a destructive command and a push, and whether `--settings` with `autoMode` is
+  accepted.
+
+### 13. Documentation and tests
 
 - The generated `OFFICE.md` documents every new field, `jobs/`, `worktrees/`, and the new local
   API routes, as it does for the current contracts.
@@ -277,6 +310,7 @@ Each step ends with `npm test` green and the owner trying it.
 - The lead is woken per job, not per task; its job-triggered runs count toward the budget.
 - No switching an existing office's type.
 - Skills in the dashboard as a per-person switch (lead only by default), with a spike before building it.
+- Auto mode for commands is off by default and never replaces the guard's always-refused list; trial thresholds as written in section 12.
 - A read-only GitHub command preset, also available to the lead, for looking up a story by number.
 
 ## Left to the builder
