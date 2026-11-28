@@ -224,7 +224,6 @@ try {
       assert(fs.existsSync(path.join(marks, 'fsmonitor')), 'the test setup fires fsmonitor');
       fs.rmSync(path.join(marks, 'fsmonitor'));
       R.state(d); assert(!fs.existsSync(path.join(marks, 'fsmonitor')), 'state runs no fsmonitor');
-      assert(R.createBranch(d, 'office/zz', R.state(d).branch).ok === false, 'a repo with core.fsmonitor set is refused for changes');
       G(d, 'config', '--unset', 'core.fsmonitor');
     }
     const base = R.state(d).branch;
@@ -331,19 +330,19 @@ try {
       assert.strictEqual(r.ok, false); assert(/git settings the office will not run with: .*filter\.x\.smudge/.test(r.err), r.err);
     }
     assert.deepStrictEqual(fs.readdirSync(marks), []);
-    assert(R.state(d).ok && R.isRepo(d) && R.listWorktrees(d).length && R.branchExists(d, 'office/pj') === true && R.hasRemote(d, 'origin') === false);
+    assert(R.state(d).ok === false && R.isRepo(d) && R.listWorktrees(d).length && R.branchExists(d, 'office/pj') === true && R.hasRemote(d, 'origin') === false);
     assert.strictEqual(R.diffStat(d, base, 'office/pj'), '');
     G(d, 'config', '--unset-all', 'filter.x.smudge'); G(d, 'config', '--unset-all', 'filter.x.clean');
     G(d, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f');
     assert(R.createBranch(d, 'office/p4', base).ok, 'filter.lfs alone is fine');
-    for (const [k, v] of [['remote.origin.push', 'refs/heads/office/pj:refs/heads/main'], ['remote.origin.pushurl', '/nowhere'], ['commit.gpgsign', 'true'], ['alias.x', '!id'], ['include.path', '/x'], ['merge.m.driver', 'cat']]) {
+    for (const [k, v] of [['remote.origin.proxy', 'http://x'], ['gpg.program', '/bin/true'], ['gpg.ssh.program', '/bin/true'], ['alias.x', '!id'], ['include.path', '/x'], ['merge.m.driver', 'cat']]) {
       G(d, 'config', k, v);
       assert.strictEqual(R.createBranch(d, 'office/p5', base).ok, false, k);
       G(d, 'config', '--unset-all', k);
     }
     assert(R.safeConfig(d).ok);
-    G(d, 'config', 'remote.origin.push', 'x');
-    assert(R.safeConfig(d).err.includes('remote.origin.push'));
+    G(d, 'config', 'alias.x', 'status');
+    assert(R.safeConfig(d).err.includes('alias.x'));
   });
 
   test('push sends exactly one named branch; pushTarget shows where', () => {
@@ -363,6 +362,70 @@ try {
     fs.rmSync(fixed, { recursive: true, force: true }); fs.mkdirSync(fixed); fs.writeFileSync(path.join(fixed, 'planted'), 'x');
     try { assert(R.state(mk('nh')).ok, 'a planted file in the predictable folder changes nothing'); }
     finally { fs.rmSync(fixed, { recursive: true, force: true }); }
+  });
+
+  test('a file dropped into the no-hooks folder (as git-lfs does) is never run and does not stop git', () => {
+    const d = mk('lfs'); const base = R.state(d).branch;
+    const marks = path.join(tmp, 'lmarks'); fs.mkdirSync(marks);
+    R.createBranch(d, 'office/l', base);
+    const wt = W('lfswt'); assert(R.addWorktree(d, wt, 'office/l1', 'office/l', root).ok);
+    const f1 = R.git(d, ['config', 'core.hooksPath']).out;
+    const hook = path.join(f1, 'pre-commit'); fs.writeFileSync(hook, `#!/bin/sh\necho x > "${path.join(marks, 'pre-commit')}"\n`); try { fs.chmodSync(hook, 0o755); } catch { /* win */ }
+    fs.writeFileSync(path.join(wt, 'l.txt'), 'l');
+    const c = R.commitAll(wt, 'l'); assert(c.ok && c.committed, c.err);
+    assert.deepStrictEqual(fs.readdirSync(marks), []);
+    const f2 = R.git(d, ['config', 'core.hooksPath']).out;
+    assert.notStrictEqual(f2, f1); assert.deepStrictEqual(fs.readdirSync(f2), []);
+  });
+
+  test('state refuses a repo with a planted clean filter and runs nothing', () => {
+    const d = mk('stf'); const marks = path.join(tmp, 'smarks'); fs.mkdirSync(marks);
+    const sc = path.join(tmp, 'clean.sh'); fs.writeFileSync(sc, `#!/bin/sh\necho x > "${path.join(marks, 'clean')}"\ncat\n`); try { fs.chmodSync(sc, 0o755); } catch { /* win */ }
+    fs.writeFileSync(path.join(d, 'f.txt'), 'f'); fs.writeFileSync(path.join(d, '.gitattributes'), '*.txt filter=x\n'); G(d, 'add', '-A'); G(d, 'commit', '-m', 'f');
+    fs.rmSync(path.join(marks, 'clean'), { force: true });
+    G(d, 'config', 'filter.x.clean', sc);
+    fs.utimesSync(path.join(d, 'f.txt'), new Date(), new Date(Date.now() + 5000));
+    const s = R.state(d);
+    assert.strictEqual(s.ok, false); assert(/git settings/.test(s.err)); assert.strictEqual(s.branch, undefined);
+    assert.deepStrictEqual(fs.readdirSync(marks), []);
+  });
+
+  test('filter.lfs values must start with "git-lfs "; required may be anything', () => {
+    const d = mk('lfsv');
+    G(d, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f'); G(d, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f'); G(d, 'config', 'filter.lfs.process', 'git-lfs filter-process'); G(d, 'config', 'filter.lfs.required', 'true');
+    assert(R.safeConfig(d).ok);
+    for (const k of ['clean', 'smudge', 'process']) {
+      G(d, 'config', `filter.lfs.${k}`, '/tmp/evil.sh');
+      assert(R.safeConfig(d).err.includes(`filter.lfs.${k}`), k);
+      G(d, 'config', `filter.lfs.${k}`, `git-lfs ${k}`);
+    }
+    G(d, 'config', 'filter.lfs.required', '/tmp/evil'); assert(R.safeConfig(d).ok);
+  });
+
+  test('Husky, signing and fork-style push settings still work; a signing program is refused', () => {
+    const d = mk('husky'); const base = R.state(d).branch;
+    const marks = path.join(tmp, 'hmarks'); fs.mkdirSync(marks);
+    fs.mkdirSync(path.join(d, '.husky'));
+    const hk = path.join(d, '.husky', 'pre-commit'); fs.writeFileSync(hk, `#!/bin/sh\necho x > "${path.join(marks, 'husky')}"\n`); try { fs.chmodSync(hk, 0o755); } catch { /* win */ }
+    G(d, 'add', '-A'); G(d, 'commit', '-m', 'husky'); fs.rmSync(path.join(marks, 'husky'), { force: true });
+    const b1 = path.join(tmp, 'hb1.git'), b2 = path.join(tmp, 'hb2.git');
+    for (const b of [b1, b2]) { fs.mkdirSync(b); G(b, 'init', '--bare'); }
+    G(d, 'remote', 'add', 'origin', b1);
+    for (const [k, v] of [['core.hooksPath', '.husky'], ['commit.gpgsign', 'true'], ['gpg.format', 'ssh'], ['user.signingkey', path.join(tmp, 'no-such-key.pub')], ['remote.origin.push', 'refs/heads/*:refs/for/*'], ['remote.origin.pushurl', b2]]) G(d, 'config', k, v);
+    assert(R.createBranch(d, 'office/x', base).ok);
+    const wt = W('huskywt'); assert(R.addWorktree(d, wt, 'office/hx', 'office/x', root).ok);
+    fs.writeFileSync(path.join(wt, 'x.txt'), 'x');
+    const c = R.commitAll(wt, 'x'); assert(c.ok && c.committed, c.err);
+    assert.strictEqual(G(wt, 'log', '-1', '--format=%G?'), 'N', 'unsigned');
+    assert(R.merge(d, 'office/x', 'office/hx').ok);
+    assert.deepStrictEqual(fs.readdirSync(marks), [], 'no husky hook ran');
+    // the caller must show pushTarget() to the boss before pushing: this is where the branch goes
+    assert.deepStrictEqual(R.pushTarget(d), { ok: true, url: b2 });
+    assert(R.push(d, 'office/x').ok);
+    assert.strictEqual(G(b2, 'for-each-ref', '--format=%(refname)'), 'refs/heads/office/x');
+    assert.strictEqual(G(b1, 'for-each-ref', '--format=%(refname)'), '');
+    G(d, 'config', 'gpg.program', '/bin/true');
+    assert(/gpg\.program/.test(R.createBranch(d, 'office/y', base).err));
   });
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
