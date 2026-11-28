@@ -575,7 +575,8 @@ function renderSettings() {
       <span class="muted">Company</span><span>${esc(S.office.company)}</span>
       <span class="muted">Manager</span><span>${esc(pa().name)}</span>
       <span class="muted">Office folder</span><span class="mono">${esc(S.office.folder)}</span>
-      <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span></div>
+      <span class="muted">Dashboard</span><span class="mono">http://${esc(location.host)}</span>
+      <span class="muted">Staff working at the same time</span><span><input class="in" id="parN" type="number" min="1" max="8" value="${esc(S.limit || 3)}" style="width:70px"> <button class="btn sm" id="parSave">Save</button><div class="muted" style="margin-top:4px">More at once is faster and uses your Claude plan faster.</div></span></div>
       <p class="muted" style="margin-top:16px;line-height:1.6">To change the company or manager's name, ask Claude in the office folder, for example <i>"rename the company to Kedai Ali Sdn Bhd"</i>. Everything is plain files: OFFICE.md explains each one.</p>`,
     addons: `<div class="featured"><div class="fhead"><img src="assets/invois-icon.png" alt=""><div><h2>invois.online</h2><div class="muted">Real quotations, invoices and payments for your sales and finance staff. Made by the team behind AI Office.</div></div></div>
       <div class="fbody">${inv && inv.enabled ? `Turned on for: <b>${(inv.staff || []).map((id) => esc(nameOf(id))).join(', ') || 'no staff yet'}</b>.<br>Not logged in yet? Ask ${esc(pa().name)} in chat: <i>"log in to invois.online"</i>, and sign in in your browser.
@@ -611,6 +612,7 @@ function renderSettings() {
     <div class="gutter" data-side="prev" data-key="settings"></div><div class="pane" style="flex:1 1 auto"><div class="pb" style="padding:20px 24px;max-width:900px">${body[S.settings]}</div></div></div>`;
   wireSplits($('#v-settings'));
   $$('[data-s]').forEach((b) => { b.onclick = () => { S.settings = b.dataset.s; renderSettings(); }; });
+  const ps = $('#parSave'); if (ps) ps.onclick = () => { ps.disabled = true; api('parallel', 'PUT', { n: Number($('#parN').value) }).then((r) => { S.limit = r.maxParallel; toast('Saved'); }, (er) => toast(er.message, true)).finally(() => { ps.disabled = false; }); };
   const ks = $('#keyShow'); if (ks) ks.onclick = () => { $('#keyV').textContent = KEY; ks.remove(); };
   if (S.settings === 'linked') {
     const show = (list) => {
@@ -778,21 +780,26 @@ function workLine(work) {
 function renderWork() {
   let el = $('#work');
   if (!el) { el = document.createElement('div'); el.id = 'work'; document.body.append(el); }
-  const work = S.tasks || [], cut = S.interrupted || [], office = S.view === 'office';
-  if (!work.length && !cut.length) workPop = false;
-  el.hidden = !((work.length || cut.length) && (office || workPop));
+  const work = S.tasks || [], cut = S.interrupted || [], wait = S.waiting || [], office = S.view === 'office';
+  if (!work.length && !cut.length && !wait.length) workPop = false;
+  el.hidden = !((work.length || cut.length || wait.length) && (office || workPop));
   if (el.hidden) return;
   el.className = office ? `board${workMin ? ' min' : ''}` : 'pop';
   if (office) el.style.left = '';
   else { const r = $('#stat').getBoundingClientRect(); el.style.left = `${Math.max(8, Math.min(r.left - 10, innerWidth - 338))}px`; }
   const heads = [...new Set(work.map((t) => t.staff))].map(personOf).filter(Boolean).slice(0, 5).map((p) => av(p)).join('');
   const open = !office || !workMin;
-  const label = [work.length ? `${work.length} working` : '', cut.length ? `${cut.length} interrupted` : ''].filter(Boolean).join(', ');
+  const label = [work.length ? `${work.length} working` : '', cut.length ? `${cut.length} interrupted` : '', wait.length ? `${wait.length} waiting` : ''].filter(Boolean).join(', ');
   el.innerHTML = `<div class="wkh" data-work="${office ? 'fold' : 'close'}" title="${office ? (open ? 'Fold' : 'Show the list') : 'Close'}"><i class="d ${work.length ? 'working' : 'waiting'}"></i><b>${label}</b><span class="heads">${heads}</span>${icon(office ? 'chevron-down' : 'x')}</div>`
     + (open ? `<div class="wkl">${work.map((t) => {
       const p = personOf(t.staff) || { name: t.staff }, asked = t.from && t.from !== 'pa' && t.from !== t.staff ? personOf(t.from) : null;
       return `<div class="wk" data-task="${esc(t.id)}">${p.colour ? av(p) : ''}<div class="sq"><div class="l1"><b>${esc(p.name)}</b><span class="faint">${since(t.created)}</span></div><div class="ti">${esc(t.title || t.id)}${asked ? ` <span class="faint">(asked by ${esc(asked.name)})</span>` : ''}</div><span class="now">${esc(t.step || 'Starting')}</span></div><button class="btn sm" data-stoptask="${esc(t.id)}">Stop</button></div>`;
-    }).join('')}${cut.length ? `<div class="wkcut">Stopped by a restart</div>${cut.map((t) => {
+    }).join('')}${wait.length ? `<div class="wkcut wkwait">Waiting</div>${wait.map((t) => {
+      const p = t.staff && personOf(t.staff);
+      const names = (t.waitingFor || []).map((id) => { const r = work.find((x) => x.id === id) || wait.find((x) => x.id === id); return r && r.staff ? nameOfStaff(r.staff) : r && r.title ? r.title : id; });
+      const why = t.blockedBy && t.blockedBy.length ? 'Stuck: a task it needs was stopped or failed' : names.length ? `Waiting for ${names.join(', ')}` : !t.staff && t.role ? `Next free ${t.role}` : `In line (at most ${S.limit} work at once)`;
+      return `<div class="wk cut" data-task="${esc(t.id)}">${p && p.colour ? av(p, 'grey') : t.role && !p ? `<span class="badge">${esc(t.role)}</span>` : ''}<div class="sq"><div class="l1">${p || t.staff ? `<b>${esc(p ? p.name : t.staff)}</b>` : ''}<span class="faint">${since(t.created)}</span></div><div class="ti">${esc(t.title || t.id)}</div><span class="now">${esc(why)}</span></div><button class="btn sm" data-stoptask="${esc(t.id)}">Stop</button></div>`;
+    }).join('')}` : ''}${cut.length ? `<div class="wkcut">Stopped by a restart</div>${cut.map((t) => {
       const p = personOf(t.staff) || { name: t.staff };
       return `<div class="wk cut">${p.colour ? av(p, 'grey') : ''}<div class="sq"><div class="l1"><b>${esc(p.name)}</b><span class="faint">${t.finished ? when(t.finished) : ''}</span></div><div class="ti">${esc(t.title || t.id)}</div></div><div class="wkb"><button class="btn sm ok" data-rerun="${esc(t.id)}">Run again</button><button class="btn sm" data-dismiss="${esc(t.id)}">Dismiss</button></div></div>`;
     }).join('')}` : ''}</div>` : '');
@@ -835,7 +842,7 @@ function renderUsage() {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-work],#stat');
   if (!t) { if (workPop && !e.target.closest('#work')) { workPop = false; renderWork(); } return; }
-  if (!(S.tasks || []).length && !(S.interrupted || []).length) { toast('Nobody is working on a task right now'); return; }
+  if (!(S.tasks || []).length && !(S.interrupted || []).length && !(S.waiting || []).length) { toast('Nobody is working on a task right now'); return; }
   const want = t.id === 'stat' ? 'toggle' : t.dataset.work;
   if (S.view === 'office') workMin = want === 'open' ? false : !workMin;
   else workPop = want === 'open' ? true : want === 'close' ? false : !workPop;
@@ -885,6 +892,10 @@ async function refresh(areas) {
   render();
 }
 
+// The work board's data: who is working, who is waiting and why.
+function loadTasks() {
+  return api('tasks').then((r) => { S.tasks = r.active.map((a) => ({ ...a, ...(r.list.find((t) => t.id === a.id) || {}) })); S.interrupted = r.interrupted || []; S.waiting = r.waiting || []; S.limit = r.limit; renderChats(); }).catch(() => {});
+}
 // Live refresh: the server says which part of the office folder changed.
 function live() {
   let fails = 0, bar = null;
@@ -916,7 +927,7 @@ function live() {
   });
   es.addEventListener('doctools', (e) => { S.doctools = JSON.parse(e.data); const l = $('.dtline'); if (l) l.outerHTML = docToolsLine(); }); // in place: keeps unsaved edits
   es.addEventListener('usage', (e) => { S.usage = JSON.parse(e.data); renderUsage(); });
-  es.addEventListener('tasks', (e) => { const act = JSON.parse(e.data); api('tasks').then((r) => { S.tasks = r.active.map((a) => ({ ...a, ...(r.list.find((t) => t.id === a.id) || {}) })); S.interrupted = r.interrupted || []; renderChats(); }).catch(() => {}); S.tasks = act; renderChats(); });
+  es.addEventListener('tasks', (e) => { const act = JSON.parse(e.data); loadTasks(); S.tasks = act; renderChats(); });
   es.addEventListener('chatlive', (e) => { const { id, step, text } = JSON.parse(e.data); const c = chatOf(id); c.live = { step, text }; if (c.running && !c.since) c.since = Date.now(); renderLive(id); });
   es.addEventListener('taskstep', (e) => {
     const x = JSON.parse(e.data);
@@ -927,6 +938,7 @@ function live() {
   es.addEventListener('chatstate', (e) => { const { id, running } = JSON.parse(e.data); const c = chatOf(id); c.running = running; c.since = running ? (c.since || Date.now()) : null; if (!running) c.live = null; renderChats(); });
   es.addEventListener('changed', (e) => {
     const areas = JSON.parse(e.data).map((a) => (a === 'office' ? ['office', 'staff'] : a === 'staff' ? ['staff', 'office'] : [a])).flat();
+    if (areas.includes('tasks')) loadTasks(); // a task file was added, stopped or finished: the waiting list moves
     refresh([...new Set(areas)].filter((a) => a !== 'events')).catch(() => {});
   });
   es.onopen = () => { fails = 0; if (bar) { bar.remove(); bar = null; load().then(render); } };
@@ -940,7 +952,7 @@ function live() {
   const run = await api('chats').catch(() => ({ running: [] }));
   const tk = await api('tasks').catch(() => ({ active: [], list: [] }));
   S.tasks = tk.active.map((a) => ({ ...a, ...(tk.list.find((t) => t.id === a.id) || {}) }));
-  S.interrupted = tk.interrupted || [];
+  S.interrupted = tk.interrupted || []; S.waiting = tk.waiting || []; S.limit = tk.limit;
   run.running.forEach((id) => { chatOf(id).running = true; });
   go(location.hash.slice(1) || 'office');
   await Promise.all(V.open.map(async (id) => { if (!personOf(id)) return; const h = await api(`chat/${id}`).catch(() => null); if (h) Object.assign(chatOf(id), { messages: h.messages, running: h.running, loaded: true }); }));

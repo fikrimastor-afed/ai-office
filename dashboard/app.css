@@ -383,5 +383,6 @@ body.term #work.board{top:136px}
 select.in{height:30px;padding:0 6px;background:#fff}
 /* work board: tasks a restart cut off */
 .wkcut{padding:6px 12px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--amber);background:#FFF8EA;border-bottom:1px solid var(--line2)}
+.wkwait{color:var(--muted);background:var(--line2)}
 .wk.cut .wkb{display:flex;flex-direction:column;gap:4px}
 .wk.cut .ti{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}

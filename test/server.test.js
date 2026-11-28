@@ -12,7 +12,7 @@ const { createServer } = require('../lib/server');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-office-srv-'));
 // a fake "claude", so briefing the PA (after an approval) never runs the real one in tests
 const bin = path.join(tmp, 'bin'); fs.mkdirSync(bin);
-const fake = "process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n');";
+const fake = "const a = process.argv.slice(2); const m = a[a.indexOf('-p') + 1] || ''; setTimeout(() => process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }) + '\\n'), m.includes('LONG') ? 5000 : 0);";
 if (process.platform === 'win32') {
   fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\n');
   fs.mkdirSync(path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code'), { recursive: true });
@@ -247,6 +247,22 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
       for (const bad of [0, 'x']) { const b = await req('PUT', '/api/parallel', { n: bad }); assert.strictEqual(b.status, 400); assert.match(JSON.stringify(b.body), /Pick a number from 1 to 8/); }
       const t = await req('GET', '/api/tasks');
       assert.strictEqual(t.body.limit, 2); assert.ok(Array.isArray(t.body.waiting));
+    });
+
+    await test('a waiting task whose need was stopped is told to the manager once, in plain words', async () => {
+      const put = (id, head, text) => fs.writeFileSync(path.join(dir, 'tasks', `${id}.md`), `---\n${head}\nstatus: new\n---\n${text}\n`);
+      const until = async (fn) => { for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 100)); } throw new Error('timeout'); };
+      const lines = async () => (await req('GET', '/api/chat/pa')).body.messages.filter((m) => m.from === 'system' && m.kind === 'error' && m.task === 'b2');
+      put('b1', 'staff: siti', 'LONG first part');
+      await until(async () => (await req('GET', '/api/tasks')).body.active.some((a) => a.id === 'b1'));
+      put('b2', 'staff: nurul\nneeds: b1', 'second part');
+      await until(async () => (await req('GET', '/api/tasks')).body.waiting.some((w) => w.id === 'b2'));
+      assert.strictEqual((await req('POST', '/api/tasks/b1/stop')).status, 200);
+      await until(async () => (await lines()).length);
+      await new Promise((r) => setTimeout(r, 600));
+      const got = await lines();
+      assert.strictEqual(got.length, 1);
+      assert.strictEqual(got[0].text, 'Nurul\'s task "second part" is waiting for a task that was stopped ("LONG first part"). Run that one again from the work board, or stop the waiting one.');
     });
   } finally {
     await srv.close();
