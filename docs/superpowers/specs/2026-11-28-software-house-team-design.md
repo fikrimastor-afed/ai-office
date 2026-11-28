@@ -21,6 +21,7 @@ quality gates), because that gives better output. It must stay at a **reasonable
 
 - Replacing the business office. It keeps working exactly as today.
 - Driving Claude Code's native agent teams from the dashboard (not possible, see Constraints).
+- Pulling stories from a GitHub Projects board into the office. The boss names the story number in chat.
 - CI integration, deploys, auto-merge to the main branch.
 - Nested teams (a staff leading their own team).
 - Mac testing (still untested, as before).
@@ -211,7 +212,43 @@ effect on dashboard runs. In a terminal, the staff definitions in `.claude/agent
 teammate definitions, so "spawn a team with the backend and reviewer staff" works. The hook
 logs the `TeammateIdle`, `TaskCreated` and `TaskCompleted` events like the others.
 
-### 11. Documentation and tests
+### 11. The owner's own flow, with installed skills, in the dashboard
+
+The owner's usual flow is: a user story number from their tech lead, brainstorm with Claude
+(superpowers), write the spec, close the gaps (grill-me), write the implementation plan, then
+build task by task with subagents. Today that works only in a terminal, because dashboard runs
+get a fixed tool list without the Skill tool. This section makes it work in the dashboard too.
+
+- **Skills switch.** A per-person switch on the Staff page, "Use my installed Claude skills"
+  (`skills: true` in `office.json`). When on, that person's dashboard chats and tasks get the
+  Skill tool added to `--tools` and `--allowedTools`, so the skills installed in the user's own
+  Claude Code are available. Off by default for everyone; in a software office the wizard turns
+  it on for the lead only. Skills cost tokens on every run, so the switch says so.
+- **Stages stay the user's.** The office does not hard-code brainstorm, spec, grill or plan
+  stages. Whatever skills the user has installed drive that part of the conversation with the
+  lead. Section 3's plan OK still applies before a build starts.
+- **Hand-off to the board.** The lead's instructions say: when a skill reaches the point of
+  building (dispatching subagents or executing a plan), do not spawn subagents; write the plan's
+  tasks as `tasks/` files with `job:`, `needs:` and `role:`, so the build runs on the office board
+  with its branches, gates and budget. The spec and plan documents the skills write are saved in
+  the project (the repo's `docs/` when there is one) and linked from the job file.
+- **Skills never widen access.** A skill only adds instructions. The tool list, file limits and
+  command guard stay the same, so a skill that asks for a command the person may not run is
+  refused as today.
+- **Looking up a story by number.** New guard preset "GitHub (read only)": `gh issue view`,
+  `gh issue list`, `gh pr view`, `gh pr list`, `gh pr diff`, `gh project item-list`, run with the
+  `gh` login on the user's machine. It can be ticked for the lead as well; this is the one case
+  where the lead runs commands, so the guard's "the manager does not run commands" rule becomes
+  "only what is ticked for the manager", and only this preset is offered there. Writing to
+  GitHub (comment, edit, close, merge) is not in the preset.
+- **Trial first.** How skills behave in non-interactive `claude -p` runs is not tested. Before
+  this is built, a spike (like `spike/` in Milestone 1) checks: do installed plugin skills load
+  with `-p` and the Skill tool in `--tools`; does a one-question-at-a-time skill work across
+  `--resume` turns; what a skill adds in tokens per run. If skills do not load or cost too much,
+  this section is dropped and the terminal stays the place for the skills flow; the rest of the
+  design does not depend on it.
+
+### 12. Documentation and tests
 
 - The generated `OFFICE.md` documents every new field, `jobs/`, `worktrees/`, and the new local
   API routes, as it does for the current contracts.
@@ -222,6 +259,7 @@ logs the `TeammateIdle`, `TaskCreated` and `TaskCompleted` events like the other
 
 1. Board: `needs`, `role` claiming, `continues`, `maxParallel`, board UI. Useful for business offices too.
 2. Software office type: wizard, default team, instruction templates, guard presets, native-teams setting.
+   Skills spike, then the skills switch and the GitHub read-only preset (section 11).
 3. Jobs, plan OK, worktrees, test and review gates, push approval.
 4. Cost: per-task and per-job cost, budget stop, board display.
 
@@ -238,6 +276,8 @@ Each step ends with `npm test` green and the owner trying it.
 - New projects get their own git repo in `projects/<project>/code/`; the office never touches the user's checked-out branch.
 - The lead is woken per job, not per task; its job-triggered runs count toward the budget.
 - No switching an existing office's type.
+- Skills in the dashboard as a per-person switch (lead only by default), with a spike before building it.
+- A read-only GitHub command preset, also available to the lead, for looking up a story by number.
 
 ## Left to the builder
 
