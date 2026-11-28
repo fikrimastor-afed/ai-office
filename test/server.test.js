@@ -436,6 +436,18 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
         assert.ok(lines.some((m) => m.done && /finished: part one/.test(m.text)), 'the chat line for a job task is still added');
         const j2 = (await req4('GET', '/api/jobs')).body.find((x) => x.id === 'j9');
         assert.deepStrictEqual([j2.done, j2.total], [3, 3]);
+        // a job whose last task was asked by a staff: the asking staff hears as today, and the manager hears the job is done
+        fs.writeFileSync(path.join(dir4, 'jobs', 'j10.md'), '---\nproject:\n---\nSecond job\n');
+        await until(async () => (await req4('GET', '/api/jobs')).body.some((x) => x.id === 'j10'));
+        new Jobs(dir4).setStatus('j10', 'approved');
+        const before2 = prompts().length;
+        mk('m1', 'staff: nurul\nfrom: siti\njob: j10', 'ask nurul');
+        await until(async () => (await req4('GET', '/api/jobs')).body.find((x) => x.id === 'j10').status === 'done', 150);
+        await until(() => prompts().slice(before2).some((m) => m.includes('your request m1')));
+        await new Promise((r) => setTimeout(r, 500));
+        const fresh2 = prompts().slice(before2);
+        assert.strictEqual(fresh2.filter((m) => m.includes('The job "Second job" is done.')).length, 1, 'one manager run with the job text');
+        assert.strictEqual(fresh2.filter((m) => m.includes('your request m1')).length, 1, 'the asking staff is told as before');
       } finally { await srv4.close(); port = p0; await new Promise((r) => setTimeout(r, 300)); }
     });
   } finally {

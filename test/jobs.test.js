@@ -33,7 +33,7 @@ process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
 const G = require('../lib/generate');
 const D = require('../lib/defaults');
 const { Tasks } = require('../lib/tasks');
-const { Jobs } = require('../lib/jobs');
+const { Jobs, doneText } = require('../lib/jobs');
 const { access, chatEnv, resolveClaude } = require('../lib/chat');
 const dir = path.join(tmp, 'office');
 G.writeOffice(dir, G.buildConfig({ company: 'Kedai Ali', pa: 'Hana', staff: D.STAFF.slice(0, 3).map(({ name, role, job }) => ({ name, role, job })) }));
@@ -102,6 +102,32 @@ fs.mkdirSync(path.join(dir, 'jobs'), { recursive: true });
     jobs.setStatus('j3', 'stopped');
     assert.strictEqual(jobs.settle('j3', [{ id: 'z', job: 'j3', status: 'done' }]), '', 'stopped never moves');
     assert.deepStrictEqual(jobs.get('j1').tasks.sort(), ['a1', 'a2'], 'task ids come from the tasks hook');
+  });
+
+  await test('a deleted job file loses its OK: a re-created file is planned again and holds its tasks', async () => {
+    const f = path.join(dir, 'jobs', 'j9.md'), reg = () => JSON.parse(fs.readFileSync(path.join(dir, '.office', 'jobs.json'), 'utf8'));
+    fs.writeFileSync(f, '---\nproject:\n---\nNinth\n'); jobs.sync(); jobs.setStatus('j9', 'approved');
+    fs.writeFileSync(f, '---\nproject:\n---\nNinth, edited in place\n'); jobs.sync();
+    assert.strictEqual(jobs.get('j9').status, 'approved', 'an edit in place keeps the OK');
+    fs.rmSync(f); jobs.sync();
+    assert.ok(!('j9' in reg()), 'the entry is gone with the file');
+    fs.writeFileSync(f, '---\nproject:\n---\nNinth, swapped\n'); jobs.sync();
+    assert.strictEqual(jobs.get('j9').status, 'planned');
+    putH('p1', 'staff: siti\njob: j9', 'held again'); tasks.scan();
+    assert.strictEqual(tasks.read('p1').status, 'new');
+    assert.strictEqual(tasks.board().waiting.find((w) => w.id === 'p1').reason, "Waiting for the boss's OK on the plan");
+  });
+
+  await test('approved becomes working only when a task is working or done; the done text lists at most 20 tasks', async () => {
+    fs.writeFileSync(path.join(dir, 'jobs', 'j8.md'), '---\nproject:\n---\nEighth\n'); jobs.sync(); jobs.setStatus('j8', 'approved');
+    for (const st of ['failed', 'stopped']) assert.strictEqual(jobs.settle('j8', [{ id: 'z', job: 'j8', status: st }]), '', `${st} before it ever started`);
+    assert.strictEqual(jobs.settle('j8', [{ id: 'z', job: 'j8', status: 'done' }, { id: 'y', job: 'j8', status: 'new' }]), 'working');
+    const many = Array.from({ length: 25 }, (_, i) => ({ id: `t${i}`, staff: 'siti', title: `task ${i}`, status: 'done', result: 'x'.repeat(400) }));
+    const text = doneText({ title: 'Big' }, 'done', many, (id) => id);
+    assert.ok(text.startsWith('[Office update, not from the boss] The job "Big" is done.\n'));
+    assert.strictEqual(text.split('\n').filter((l) => l.startsWith('- ')).length, 20);
+    assert.ok(text.includes('task 24') && !text.includes('task 4"') && text.includes('... and 5 more'));
+    assert.ok(text.includes('x'.repeat(300)) && !text.includes('x'.repeat(301)));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
