@@ -15,6 +15,8 @@ const msg = a[a.indexOf('-p') + 1];
 fs.appendFileSync(${JSON.stringify(path.join(tmp, 'calls.jsonl'))}, JSON.stringify({ args: a, cwd: process.cwd(), at: Date.now() }) + '\\n');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const wait = msg.includes('LONG') ? 2500 : 400;
+const sid = a.includes('--resume') ? a[a.indexOf('--resume') + 1] : 'sess-' + Date.now() + '-' + process.pid;
+out({ type: 'system', subtype: 'init', session_id: sid });
 setTimeout(() => {
   out({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'Done: ' + msg.split('\\n')[2] }] } });
   out({ type: 'result', subtype: 'success', is_error: false });
@@ -233,6 +235,40 @@ const test = async (name, fn) => { await fn(); n++; console.log(`ok ${n} ${name}
     assert.strictEqual(tasks.read('r7').result, 'There is no active staff with the role "Sales".');
     assert.strictEqual(ended.filter((e) => e[0] === 'r7').length, 1, 'the requester is told once');
     fs.writeFileSync(f, JSON.stringify(cfg)); tasks.stopAll(); await until(() => tasks.active().length === 0);
+  });
+
+  await test('the office notes the Claude session of a task; a follow-up resumes it, as the same staff', async () => {
+    putH('f1', 'staff: nurul', 'Draft the invoice');
+    tasks.scan(); await until(() => endedOf('f1'));
+    const sid = tasks.read('f1').session; assert.match(sid, /^sess-/);
+    putH('f2', 'continues: f1', 'Fix the total');             // staff may be left out
+    tasks.scan(); await until(() => endedOf('f2'));
+    const c = calls().find((x) => x.args[x.args.indexOf('-p') + 1].includes('task f2'));
+    assert.strictEqual(c.args[c.args.indexOf('--resume') + 1], sid);
+    assert.strictEqual(path.resolve(c.cwd), path.resolve(dir, 'staff', 'nurul'));
+    assert.strictEqual(tasks.read('f2').staff, 'nurul');
+    assert.strictEqual(tasks.read('f2').session, sid);
+    assert.match(c.args[c.args.indexOf('-p') + 1], /^Follow-up from Hana \(task f2, continuing task f1\):/);
+  });
+
+  await test('a follow-up waits until the task it continues has ended', async () => {
+    putH('f3', 'staff: siti', 'LONG quote'); putH('f4', 'continues: f3', 'one more line');
+    tasks.scan(); await until(() => tasks.active().some((a) => a.id === 'f3'));
+    assert.deepStrictEqual(tasks.board().waiting.find((w) => w.id === 'f4').waitingFor, ['f3']);
+    await until(() => endedOf('f4'));
+    assert.ok(tasks.read('f4').started >= tasks.read('f3').finished);
+  });
+
+  await test('follow-up mistakes fail plainly; with no session to resume it starts fresh and is told to read the old task', async () => {
+    putH('f5', 'continues: nope', 'x'); putH('f6', 'staff: siti\ncontinues: f1', 'x');
+    put('f7', 'aina', 'old'); fs.writeFileSync(path.join(dir, 'tasks', 'f7.md'), '---\nstaff: aina\nstatus: done\n---\nold task\n\n## Result\n\nok\n');
+    putH('f8', 'continues: f7', 'go on');
+    tasks.scan(); await until(() => endedOf('f8'));
+    assert.strictEqual(tasks.read('f5').result, 'Task "nope" in continues does not exist.');
+    assert.strictEqual(tasks.read('f6').result, 'A follow-up goes to the same staff as the task it continues (nurul).');
+    const c = calls().find((x) => x.args[x.args.indexOf('-p') + 1].includes('task f8'));
+    assert.ok(!c.args.includes('--resume'));
+    assert.match(c.args[c.args.indexOf('-p') + 1], /You have no memory of task f7: read .*f7\.md first\./);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
